@@ -2690,6 +2690,17 @@ void reschedulePropertyRead(const ConfigData& configData)
         }
     });
 }
+
+bool bmcBootCheck()
+{
+    std::filesystem::path acLossFile("/tmp/ACLost");
+    if (std::filesystem::exists(acLossFile))
+    {
+        return true; // AC Loss Detected
+    }
+    return false;
+}
+
 } // namespace power_control
 
 int main(int argc, char* argv[])
@@ -2991,7 +3002,7 @@ int main(int argc, char* argv[])
         }
     }
     // Check if we need to start the Power Restore policy
-    if (powerState != PowerState::on)
+    if (powerState != PowerState::on && bmcBootCheck())
     {
         powerRestore.run();
     }
