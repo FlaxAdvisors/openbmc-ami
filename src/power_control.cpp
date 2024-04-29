@@ -125,6 +125,12 @@ static std::string buttonDbusName = "xyz.openbmc_project.Chassis.Buttons";
 static std::string nmiDbusName = "xyz.openbmc_project.Control.Host.NMI";
 static std::string rstCauseDbusName =
     "xyz.openbmc_project.Control.Host.RestartCause";
+static constexpr const char* OOBInventoryObjPath =
+    "/xyz/openbmc_project/OOBInventoryConfig";
+static constexpr const char* OOBInventoryIntf =
+    "xyz.openbmc_project.OobBiosConfigInventory.OobBiosConfigInventory";
+static constexpr const char* OOBInventorybusName =
+    "xyz.openbmc_project.OOBInventoryConfig";
 static std::shared_ptr<sdbusplus::asio::dbus_interface> hostIface;
 static std::shared_ptr<sdbusplus::asio::dbus_interface> chassisIface;
 #ifdef CHASSIS_SYSTEM_RESET
@@ -142,6 +148,7 @@ static std::shared_ptr<sdbusplus::asio::dbus_interface> restartCauseIface;
 static gpiod::line powerButtonMask;
 static gpiod::line resetButtonMask;
 static bool nmiButtonMasked = false;
+static bool HostState = false;
 #if IGNORE_SOFT_RESETS_DURING_POST
 static bool ignoreNextSoftReset = false;
 #endif
@@ -622,6 +629,29 @@ static void setPowerState(const PowerState state)
 {
     powerState = state;
     logStateTransition(state);
+
+    if (powerState == power_control::PowerState::off)
+    {
+        HostState = true;
+    }
+    if ((powerState == power_control::PowerState::on) ||
+        (powerState == power_control::PowerState::cycleOff) &&
+            (HostState == true))
+    {
+        try
+        {
+            auto methodCall = conn->new_method_call(
+                OOBInventorybusName, OOBInventoryObjPath, OOBInventoryIntf,
+                "deleteBootStrapAccounts");
+            conn->call(methodCall);
+            HostState = false;
+        }
+        catch (const std::exception& e)
+        {
+            lg2::error("Failed to delete boot Strap accounts: {ERROR_MSG}",
+                       "ERROR_MSG", e.what());
+        }
+    }
 
     hostIface->set_property("CurrentHostState",
                             std::string(getHostState(powerState)));
