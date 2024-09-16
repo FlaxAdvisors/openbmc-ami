@@ -38,6 +38,8 @@
 #include <regex>
 #include <string_view>
 
+static std::shared_ptr<sdbusplus::asio::dbus_interface> taskIface;
+
 namespace power_control
 {
 static boost::asio::io_context io;
@@ -2744,6 +2746,26 @@ bool bmcBootCheck()
 
 } // namespace power_control
 
+void createInterface(sdbusplus::asio::object_server& objectServer,
+                      std::string objectPath)
+ {
+     uint16_t defaultId = 0;
+     std::string TaskName;
+     std::string defaultStatus =
+         "xyz.openbmc_project.Common.Task.OperationStatus.Completed";
+     taskIface = objectServer.add_interface(objectPath.c_str(),
+                                            "xyz.openbmc_project.Common.Task");
+     taskIface->register_property(
+         "Status", defaultStatus,
+         sdbusplus::asio::PropertyPermission::readWrite);
+     taskIface->register_property(
+         "TaskId", defaultId, sdbusplus::asio::PropertyPermission::readWrite);
+     taskIface->register_property(
+         "TaskName", TaskName, sdbusplus::asio::PropertyPermission::readWrite);
+     taskIface->initialize();
+ }
+
+
 int main(int argc, char* argv[])
 {
     using namespace power_control;
@@ -3070,6 +3092,8 @@ int main(int argc, char* argv[])
             powerTimeOut = propertyValue;
             return true;
         });
+    
+    createInterface(hostServer, "/xyz/openbmc_project/state/host" + node);
 
     // Interface for IPMI/Redfish initiated host state transitions
     hostIface->register_property(
@@ -3205,7 +3229,9 @@ int main(int argc, char* argv[])
     // Chassis Control Interface
     chassisIface =
         chassisServer.add_interface("/xyz/openbmc_project/state/chassis" + node,
-                                    "xyz.openbmc_project.State.Chassis");
+                                    "xyz.openbmc_project.State.Chassis");  
+
+    createInterface(chassisServer, "/xyz/openbmc_project/state/chassis" + node);
 
     chassisIface->register_property(
         "ChassisHostTransitionTimeOut", timeOut,
@@ -3659,6 +3685,7 @@ int main(int argc, char* argv[])
         "/xyz/openbmc_project/state/host" + node,
         "xyz.openbmc_project.State.OperatingSystem.Status");
 
+    createInterface(osServer, "/xyz/openbmc_project/state/os");
     // Get the initial OS state based on POST complete
     //      0: Asserted, OS state is "Standby" (ready to boot)
     //      1: De-Asserted, OS state is "Inactive"
