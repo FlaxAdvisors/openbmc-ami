@@ -260,6 +260,13 @@ static void beep(const uint8_t& beepPriority)
         "xyz.openbmc_project.BeepCode", "Beep", uint8_t(beepPriority));
 }
 
+static void
+    sendSignal(const std::shared_ptr<sdbusplus::asio::dbus_interface> iface,
+               const std::string property)
+{
+    iface->signal_property(property);
+}
+
 enum class OperatingSystemStateStage
 {
     Inactive,
@@ -3330,6 +3337,10 @@ int main(int argc, char* argv[])
                     return 0;
                 }
             }
+
+            if (resp == requested)
+                sendSignal(hostIface, "RequestedHostTransition");
+
             resp = requested;
             return 1;
         });
@@ -3502,6 +3513,10 @@ int main(int argc, char* argv[])
                 throw std::invalid_argument("Unrecognized Transition Request");
                 return 0;
             }
+
+            if (resp == requested)
+                sendSignal(chassisIface, "RequestedPowerTransition");
+
             resp = requested;
             return 1;
         });
