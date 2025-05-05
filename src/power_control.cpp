@@ -3434,7 +3434,7 @@ int main(int argc, char* argv[])
             else if (requested ==
                      "xyz.openbmc_project.State.Chassis.Transition.PowerCycle")
             {
-                if (timerStarted == false)
+                if (timerStarted_chassis == false)
                 {
                     timerStarted_chassis = true;
                     auto interval = std::chrono::seconds(chassisTimeOut);
