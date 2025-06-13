@@ -34,6 +34,13 @@ sources = [
   'mctp-socket.c'
 ]
 
+# Add npcmi3c support
+if get_option('enable-npcmi3c').enabled()
+    sources += ['npcmi3c.c', 'pec.c']
+    summary('enable-npcmi3c','-DENABLE_NPCMI3C', section : 'Enabled Features')
+    add_project_arguments('-DENABLE_NPCMI3C', language: ['c', 'cpp'])
+endif
+
 json_c = declare_dependency(dependencies: [comp.find_library('json-c')])
 
 deps = [json_c]
@@ -96,6 +103,14 @@ install_headers(
   'mctp-common-api/mctp-discovery-busowner.h',
   'mctp-common-api/mctp-utils.h'
 )
+
+# Install npcmi3c headers if enabled
+if get_option('enable-npcmi3c').enabled()
+   install_headers(
+    'libmctp-npcmi3c.h',
+    'pec.h'
+  )
+endif
 
 systemd_system_unit_dir = dependency('systemd').get_variable(
           pkgconfig: 'systemdsystemunitdir')

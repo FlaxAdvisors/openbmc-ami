@@ -9,6 +9,11 @@ tests = [
   'test_serial'
 ]
 
+# Add npcmi3c test if enabled
+if get_option('enable-npcmi3c').enabled()
+   tests += ['test_npcmi3c']
+endif
+
 if get_option('tests').enabled()
 
   if get_option('mocked-drivers').enabled()
@@ -23,6 +28,8 @@ if get_option('tests').enabled()
             build_rpath: get_option('oe-sdk').enabled() ? rpath : '',
             link_with: libmctp,
             include_directories: include_directories(['.', '..']),
+            install: true,
+            install_dir: get_option('bindir')
           ))
   endforeach
 endif

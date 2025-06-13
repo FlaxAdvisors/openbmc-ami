@@ -30,6 +30,7 @@
 #include "libmctp.h"
 #include "libmctp-serial.h"
 #include "libmctp-astlpc.h"
+#include "libmctp-smbus.h"
 #include "libmctp-astpcie.h"
 #include "libmctp-astspi.h"
 #include "libmctp-externals.h"

@@ -15,6 +15,12 @@ option(
     description: '''Enable MCTPoUSB functionality. Also required libmctp dependency during runtime.'''
 )
 option(
+    'enable-npcmi3c',
+    type: 'feature',
+    value: 'enabled',
+    description: '''Enable NPCM I3C MCTP binding functionality.'''
+)
+option(
     'enable-mockup-endpoint',
     type: 'feature',
     value: 'disabled',

@@ -18,6 +18,21 @@ extern "C" {
 #define MCTP_SMBUS_READ_TIMEOUT_REPEAT	 20
 #define MCTP_I2C_MAX_BUSES		 32
 
+#define MCTP_HEADER_SIZE 4
+#define MCTP_PAYLOAD_SIZE 64
+
+#define SMBUS_HEADER_SIZE 4
+#define SMBUS_PEC_BYTE_SIZE 1
+
+#define SMBUS_TX_BUFF_SIZE                                                     \
+	((MCTP_HEADER_SIZE) + (SMBUS_HEADER_SIZE) + (MCTP_PAYLOAD_SIZE) +      \
+	 (SMBUS_PEC_BYTE_SIZE))
+
+#define IS_MUX_PORT 0x80
+#define PULL_MODEL_HOLD 0x40
+#define CLOSE_AFTER_RESPONSE 0x20
+#define CLOSE_IMMEDIATE 0x10
+
 struct mctp_binding_smbus;
 
 struct mctp_smbus_pkt_private {

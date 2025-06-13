@@ -37,3 +37,13 @@ executable(
   link_with: [libmctp, libmctp_common_api],
   install: true
 )
+
+# Add npcmi3c daemon if enabled
+if get_option('enable-npcmi3c').enabled()
+  executable(
+    'mctp-npcmi3c-daemon',
+    'mctp-npcmi3c-daemon.c',
+    include_directories: include_directories(headers),
+    link_with: libmctp,
+    install: true)
+endif
