@@ -18,8 +18,6 @@ int capture_init(void)
 
 int capture_prepare(struct capture *cap)
 {
-	int rc;
-
 	if (cap->linktype < CAPTURE_LINKTYPE_FIRST ||
 	    cap->linktype > CAPTURE_LINKTYPE_LAST) {
 		fprintf(stderr,
