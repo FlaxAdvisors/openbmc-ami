@@ -39,6 +39,7 @@
 #include <string_view>
 
 static std::shared_ptr<sdbusplus::asio::dbus_interface> taskIface;
+static std::shared_ptr<sdbusplus::asio::dbus_interface> osSysIface;
 
 namespace power_control
 {
@@ -659,9 +660,9 @@ static void setPowerState(const PowerState state)
     {
         HostState = true;
     }
-    if ((powerState == power_control::PowerState::on) ||
+    if ((powerState == power_control::PowerState::on) || (
         (powerState == power_control::PowerState::cycleOff) &&
-            (HostState == true))
+            (HostState == true)) )
     {
         try
         {
