@@ -1,0 +1,22 @@
+From 50871d855f6c561a385b4b5c12d5eeb24f2889cc Mon Sep 17 00:00:00 2001
+From: harlan <hmccanne@exclamationpoint.com>
+Date: Wed, 11 Feb 2026 21:56:27 +0000
+Subject: [PATCH] Fix wanring in mctp-capture
+
+---
+ utils/mctp-capture.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/utils/mctp-capture.c b/utils/mctp-capture.c
+index 05180ec..b13db88 100644
+--- a/utils/mctp-capture.c
++++ b/utils/mctp-capture.c
+@@ -18,8 +18,6 @@ int capture_init(void)
+ 
+ int capture_prepare(struct capture *cap)
+ {
+-	int rc;
+-
+ 	if (cap->linktype < CAPTURE_LINKTYPE_FIRST ||
+ 	    cap->linktype > CAPTURE_LINKTYPE_LAST) {
+ 		fprintf(stderr,

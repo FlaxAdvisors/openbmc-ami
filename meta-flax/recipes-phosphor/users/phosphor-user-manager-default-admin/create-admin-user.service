@@ -1,0 +1,14 @@
+[Unit]
+Description=Create default admin IPMI user
+After=xyz.openbmc_project.User.Manager.service phosphor-ipmi-host.service phosphor-ipmi-net@eth0.service
+Requires=xyz.openbmc_project.User.Manager.service phosphor-ipmi-host.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/create-admin-user.sh
+RemainAfterExit=yes
+# Give services time to fully start
+ExecStartPre=/bin/sleep 10
+
+[Install]
+WantedBy=multi-user.target
