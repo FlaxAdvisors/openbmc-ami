@@ -1,0 +1,47 @@
+From b2d1c0dfc908311934874aef7c392714b9683f32 Mon Sep 17 00:00:00 2001
+From: OpenEmbedded <oe.patch@oe>
+Date: Thu, 12 Feb 2026 22:41:03 +0000
+Subject: [PATCH] Increased flash chip size
+
+---
+ .../aspeed/aspeed-bmc-facebook-tiogapass.dts  | 27 ++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+index 704ee684e0fb..f1e4118d2659 100644
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -57,7 +57,32 @@ &fmc {
+ 	flash@0 {
+ 		status = "okay";
+ 		m25p,fast-read;
+-#include "openbmc-flash-layout.dtsi"
++ 
++                partitions {
++                        compatible = "fixed-partitions";
++                        #address-cells = <1>;
++                        #size-cells = <1>;
++ 
++                        u-boot@0 {
++                                reg = <0x0 0x60000>;
++                                label = "u-boot";
++                        };
++ 
++                        u-boot-env@60000 {
++                                reg = <0x60000 0x20000>;
++                                label = "u-boot-env";
++                        };
++ 
++                        kernel@100000 {
++                                reg = <0x100000 0x2800000>;
++                                label = "kernel";
++                        };
++ 
++                        rwfs@2900000 {
++                                reg = <0x2900000 0x1700000>;
++                                label = "rwfs";
++                        };
++                };
+ 	};
+ };
+ 
