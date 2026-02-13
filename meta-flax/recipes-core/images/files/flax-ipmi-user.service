@@ -1,0 +1,17 @@
+[Unit]
+Description=Create default IPMI/web user on first boot
+# Must run after phosphor-user-manager is on the bus
+After=xyz.openbmc_project.EntityManager.service
+Requires=xyz.openbmc_project.EntityManager.service
+# Only run once - presence of done file skips on subsequent boots
+ConditionPathExists=!/etc/flax-ipmi-user.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flax-ipmi-user.sh
+RemainAfterExit=yes
+# Give it time - user-manager can be slow on first boot
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
