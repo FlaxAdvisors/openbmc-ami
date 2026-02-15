@@ -1,6 +1,2 @@
-# Remove 'settings' from the RDEPENDS of the packagegroup-obmc-apps-extras (or whichever sub-package it's in)
-# We use the :remove operator which is the most 'powerful' way to override
-RDEPENDS:${PN}-extras:remove = "settings"
-
-# If it's in the main package, use this instead/as well:
-RDEPENDS:${PN}:remove = "settings"
+# settings package provides phosphor-settings-manager, which exposes
+# D-Bus interfaces needed by SOL (xyz.openbmc_project.Ipmi.SOL) and others
