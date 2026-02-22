@@ -1,0 +1,43 @@
+From 247b8acfba2a68b11fed06e1bc0a3629a109be35 Mon Sep 17 00:00:00 2001
+From: harlan <hmccanne@exclamationpoint.com>
+Date: Fri, 20 Feb 2026 20:41:05 +0000
+Subject: [PATCH] done
+
+---
+ .../dts/aspeed/aspeed-bmc-facebook-tiogapass.dts     | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+index f1e4118d2659..3ddb4e7033c1 100644
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -52,10 +52,15 @@ iio-hwmon {
+ 
+ };
+ 
++&uart_routing {
++        status = "okay";
++};
++
+ &fmc {
+ 	status = "okay";
+ 	flash@0 {
+ 		status = "okay";
++		label = "bmc";
+ 		m25p,fast-read;
+  
+                 partitions {
+@@ -123,6 +128,13 @@ &uart2 {
+ &uart3 {
+ 	// SoL BMC Console
+ 	status = "okay";
++//	pinctrl-names = "default";
++//	pinctrl-0 = <&pinctrl_txd3_default &pinctrl_rxd3_default>;
++};
++
++&uart4 {
++	// SoL Host Console
++	status = "okay";
+ };
+ 
+ &uart5 {
