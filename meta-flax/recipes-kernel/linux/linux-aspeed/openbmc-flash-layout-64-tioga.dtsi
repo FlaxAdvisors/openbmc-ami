@@ -1,0 +1,27 @@
+  
+partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+  
+        u-boot@0 {
+                reg = <0x0 0x60000>;
+                label = "u-boot";
+        };
+  
+        u-boot-env@60000 {
+                reg = <0x60000 0x20000>;
+                label = "u-boot-env";
+        };
+  
+        kernel@100000 {
+                reg = <0x100000 0x2800000>;
+                label = "kernel";
+        };
+  
+        rwfs@2900000 {
+                reg = <0x2900000 0x1700000>;
+                label = "rwfs";
+        };
+};
+

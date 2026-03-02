@@ -9,9 +9,7 @@ Subject: [PATCH] done
 
 diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
 index f1e4118d2659..3ddb4e7033c1 100644
---- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
-+++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
-@@ -52,10 +52,15 @@ iio-hwmon {
+@@ -52,10 +52,15 @@
  
  };
  
@@ -25,19 +23,17 @@ index f1e4118d2659..3ddb4e7033c1 100644
  		status = "okay";
 +		label = "bmc";
  		m25p,fast-read;
-  
-                 partitions {
-@@ -123,6 +128,13 @@ &uart2 {
- &uart3 {
+ #include "openbmc-flash-layout-64-tioga.dtsi"
+ 	};
+@@ -99,6 +99,11 @@
  	// SoL BMC Console
  	status = "okay";
-+//	pinctrl-names = "default";
-+//	pinctrl-0 = <&pinctrl_txd3_default &pinctrl_rxd3_default>;
-+};
+ };
 +
 +&uart4 {
-+	// SoL Host Console
++	// SoL BMC Console
 +	status = "okay";
- };
++};
  
  &uart5 {
+ 	// BMC Console
