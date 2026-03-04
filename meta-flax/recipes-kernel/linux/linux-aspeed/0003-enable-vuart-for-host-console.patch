@@ -1,0 +1,28 @@
+From a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 Mon Sep 17 00:00:00 2001
+From: OpenBMC Build <openbmc@build>
+Date: Wed, 04 Mar 2026 00:00:00 +0000
+Subject: [PATCH] arm: dts: aspeed: tiogapass: enable VUART for host console
+
+TiogaPass uses an Intel Xeon D with PCH that emulates COM1 (0x3F8)
+over the LPC bus. Enable the ASPEED VUART to intercept these LPC UART
+cycles and expose the host console as /dev/ttyVUART0.
+
+---
+ arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -55,6 +55,11 @@
+ &uart_routing {
+         status = "okay";
+ };
+
++&vuart {
++	/* Host console via LPC COM1 (0x3F8) emulation */
++	status = "okay";
++};
++
+ &fmc {
+ 	status = "okay";

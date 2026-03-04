@@ -1,0 +1,38 @@
+From: FlaxAdvisors
+Subject: Fix two crashes in settings.cpp when settings service unavailable
+
+1. service(): if ObjectMapper returns an empty result, result.begin() is
+   end() and dereferencing it is undefined behaviour (SEGV).
+2. boot::setting(): map::at() throws std::out_of_range when the requested
+   interface is absent from the objects map.
+
+--- a/settings.cpp
++++ b/settings.cpp
+@@ -62,6 +62,11 @@
+     {
+         auto response = bus.call(mapperCall);
+         response.read(result);
++        if (result.empty())
++        {
++            lg2::error("No service found in mapper: {PATH}", "PATH", path);
++            elog<InternalFailure>();
++        }
+         return result.begin()->first;
+     }
+     catch (const std::exception& e)
+@@ -81,7 +86,14 @@
+     constexpr auto oneTime = "one_time";
+     constexpr auto enabledIntf = "xyz.openbmc_project.Object.Enable";
+
+-    const std::vector<Path>& paths = objects.map.at(iface);
++    auto mapIt = objects.map.find(iface);
++    if (mapIt == objects.map.end())
++    {
++        log<level::ERR>("Interface not found in settings map",
++                        entry("INTERFACE=%s", iface.c_str()));
++        elog<InternalFailure>();
++    }
++    const std::vector<Path>& paths = mapIt->second;
+     auto count = paths.size();
+     if (count != bootObjCount)
+     {

@@ -8,7 +8,7 @@ Type=oneshot
 ExecStart=/usr/sbin/create-admin-user.sh
 RemainAfterExit=yes
 # Give services time to fully start
-ExecStartPre=/bin/sleep 10
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

@@ -12,6 +12,7 @@ SRC_URI = "file://create-admin-user.sh \
 
 
 SYSTEMD_SERVICE:${PN} = "create-admin-user.service"
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 do_install() {
     install -d ${D}${sbindir}

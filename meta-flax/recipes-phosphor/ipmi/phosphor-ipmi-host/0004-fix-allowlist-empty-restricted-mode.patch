@@ -1,0 +1,24 @@
+From: FlaxAdvisors
+Subject: Fix SEGV in AllowlistFilter when prov-mode-mgr is not running
+
+When prov-mode-mgr is absent, postInit() returns early after catching
+std::out_of_range from map.at(), leaving restrictedMode as an empty
+vector. filterMessage() then calls restrictedMode[hostIdx] (operator[]
+with no bounds check) on an empty vector<bool>, causing a SEGV on every
+local (system interface) IPMI command.
+
+Fix: guard with a size check so that if restrictedMode was never
+populated, the filter simply passes all commands through.
+
+--- a/whitelist-filter.cpp
++++ b/whitelist-filter.cpp
+@@ -228,7 +228,8 @@
+     size_t hostIdx = request->ctx->hostIdx;
+
+     if (request->ctx->channel == ipmi::channelSystemIface &&
+-        restrictedMode[hostIdx])
++        hostIdx < restrictedMode.size() &&
++        restrictedMode[hostIdx])
+     {
+         if (!std::binary_search(
+             allowlist.cbegin(), allowlist.cend(),

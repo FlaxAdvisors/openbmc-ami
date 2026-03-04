@@ -1,0 +1,38 @@
+From: FlaxAdvisors
+Subject: Fix SOL activation failure when xyz.openbmc_project.Ipmi.SOL is absent
+
+updateSOLParameter() catches std::runtime_error to handle a missing SOL
+config D-Bus object, but sdbusplus exceptions (including ResourceNotFound
+returned by the ObjectMapper when the object does not exist) inherit from
+sdbusplus::exception_t -> std::exception, NOT std::runtime_error.
+
+The uncaught exception propagates to the top-level handler in
+sd_event_loop.cpp which logs "Executing the IPMI message failed" and
+returns without sending any response.  ipmitool then times out and
+reports "No response activating SOL payload".
+
+The sol::Manager fields default to safe values (enable=true, reasonable
+timings), so when the SOL config service is absent netipmid can proceed
+with defaults.  Change both catch specifiers to std::exception so the
+error is swallowed locally and SOL activation continues.
+
+--- a/sol/sol_manager.cpp
++++ b/sol/sol_manager.cpp
+@@ -133,7 +133,7 @@ void Manager::updateSOLParameter(uint8_t channelNum)
+             solService = ipmi::getService(dbus, solInterface,
+                                           solPathWitheEthName);
+         }
+-        catch (const std::runtime_error& e)
++        catch (const std::exception& e)
+         {
+             solService.clear();
+             lg2::error("Get SOL service failed: {ERROR}", "ERROR", e);
+@@ -145,7 +145,7 @@ void Manager::updateSOLParameter(uint8_t channelNum)
+         properties = ipmi::getAllDbusProperties(
+             dbus, solService, solPathWitheEthName, solInterface);
+     }
+-    catch (const std::runtime_error& e)
++    catch (const std::exception& e)
+     {
+         lg2::error("Setting sol parameter: {ERROR}", "ERROR", e);
+         return;

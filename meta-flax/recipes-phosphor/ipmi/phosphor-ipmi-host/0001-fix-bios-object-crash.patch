@@ -1,0 +1,22 @@
+From: FlaxAdvisors
+Subject: Fix crash when BIOS object lacks RedundancyPriority
+
+The code assumes all software objects have RedundancyPriority interface
+but BIOS objects don't. Check if interfaces exist before accessing.
+
+--- a/apphandler.cpp
++++ b/apphandler.cpp
+@@ -214,6 +214,13 @@ static std::string getActiveSoftwareVersionInfo(ipmi::Context::ptr ctx)
+             try
+             {
+                 auto& intfMap = objIter.second;
++                // Skip objects missing required interfaces (e.g., BIOS)
++                if (intfMap.find(redundancyIntf) == intfMap.end() ||
++                    intfMap.find(versionIntf) == intfMap.end() ||
++                    intfMap.find(activationIntf) == intfMap.end())
++                {
++                    continue;
++                }
+                 auto& redundancyPriorityProps = intfMap.at(redundancyIntf);
+                 auto& versionProps = intfMap.at(versionIntf);
+                 auto& activationProps = intfMap.at(activationIntf);

@@ -1,0 +1,25 @@
+From: FlaxAdvisors
+Subject: Fix SEGV in ipmi_sen_get_sdr when no YAML sensors are defined
+
+When the compiled sensor table is empty (no sensor YAML files provided),
+ipmi_sen_get_sdr assigns sensors.end() to the 'sensor' iterator and then
+proceeds to dereference it unconditionally, causing a SEGV via
+populate_record_from_dbus -> isAnalogSensor when ipmitool sends Get SDR 0.
+
+Return SENSOR_INVALID immediately when the table is empty so the caller
+gets a clean error response instead of a crash.
+
+--- a/sensorhandler.cpp
++++ b/sensorhandler.cpp
+@@ -1334,6 +1334,11 @@
+     // the call.
+     auto sensor = ipmi::sensor::sensors.begin();
+     auto recordID = get_sdr::request::get_record_id(req);
++    if (sensor == ipmi::sensor::sensors.end())
++    {
++        *data_len = 0;
++        return IPMI_CC_SENSOR_INVALID;
++    }
+
+     // At the beginning of a scan, the host side will send us id=0.
+     if (recordID != 0)
