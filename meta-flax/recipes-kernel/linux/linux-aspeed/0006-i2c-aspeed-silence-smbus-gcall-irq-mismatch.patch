@@ -1,0 +1,59 @@
+From: TiogaPass BMC <bmc@tiogapass>
+Date: Thu, 6 Mar 2026 00:00:00 +0000
+Subject: [PATCH] i2c: aspeed: silence unhandled SMBus/Gcall interrupt bits
+
+The ASPEED I2C interrupt status register contains bits 8-12 for
+SMBus-related events (General Call address match, SMBus default/device-
+alt/ARP address match, and SMBus ALERT). These bits are included in
+ASPEED_I2CD_INTR_RECV_MASK so the driver reads them, and the hardware
+write-back at the top of the ISR clears them. However, neither the
+master nor slave IRQ handler accounts for them, causing the 'irq handled
+!= irq' dev_err to fire for every transaction on buses with SMBus devices.
+
+On TiogaPass, I2C bus 5 has Infineon PXE1610 voltage regulators that
+assert SMBALERT# (bit 12) after CPU power-on. This floods the kernel log
+with hundreds of error messages per second, severely degrading boot
+performance.
+
+Define the missing bit constants, silently acknowledge them in the IRQ
+handler, and change the remaining mismatch error to dev_err_ratelimited.
+
+Signed-off-by: TiogaPass BMC <bmc@tiogapass>
+---
+--- a/drivers/i2c/busses/i2c-aspeed.c	2026-03-06 20:45:04.006363955 +0000
++++ b/drivers/i2c/busses/i2c-aspeed.c	2026-03-06 20:48:39.206361597 +0000
+@@ -70,6 +70,15 @@
+ #define ASPEED_I2CD_INTR_RECV_MASK			0xf000ffff
+ #define ASPEED_I2CD_INTR_SDA_DL_TIMEOUT			BIT(14)
+ #define ASPEED_I2CD_INTR_BUS_RECOVER_DONE		BIT(13)
++/* Bits 8-12: SMBus/General-Call events. Included in RECV_MASK but not in
++ * INTR_ALL and not handled by master/slave IRQ handlers. Defined here so
++ * they can be silently acknowledged to prevent IRQ-mismatch log storms. */
++#define ASPEED_I2CD_INTR_SMBUS_ALERT			BIT(12)
++#define ASPEED_I2CD_INTR_SMBUS_ARP_ADDR			BIT(11)
++#define ASPEED_I2CD_INTR_SMBUS_DEV_ALT_ADDR		BIT(10)
++#define ASPEED_I2CD_INTR_SMBUS_DEF_ADDR			BIT(9)
++#define ASPEED_I2CD_INTR_GCALL_ADDR			BIT(8)
++#define ASPEED_I2CD_INTR_SMBUS_GCALL_MASK		GENMASK(12, 8)
+ #define ASPEED_I2CD_INTR_SLAVE_MATCH			BIT(7)
+ #define ASPEED_I2CD_INTR_SCL_TIMEOUT			BIT(6)
+ #define ASPEED_I2CD_INTR_ABNORMAL			BIT(5)
+@@ -663,10 +672,15 @@
+ #endif /* CONFIG_I2C_SLAVE */
+ 
+ 	irq_remaining &= ~irq_handled;
++	/* SMBus ALERT and General-Call address-match bits (8-12) are cleared
++	 * by the hardware write-back above but not handled by master/slave
++	 * handlers. Acknowledge them silently to prevent log floods from boards
++	 * where SMBus devices assert ALERT during normal operation. */
++	irq_remaining &= ~(irq_remaining & ASPEED_I2CD_INTR_SMBUS_GCALL_MASK);
+ 	if (irq_remaining)
+-		dev_err(bus->dev,
+-			"irq handled != irq. expected 0x%08x, but was 0x%08x\n",
+-			irq_received, irq_handled);
++		dev_err_ratelimited(bus->dev,
++				    "irq handled != irq. expected 0x%08x, but was 0x%08x\n",
++				    irq_received, irq_handled);
+ 
+ 	/* Ack Rx done */
+ 	if (irq_received & ASPEED_I2CD_INTR_RX_DONE) {

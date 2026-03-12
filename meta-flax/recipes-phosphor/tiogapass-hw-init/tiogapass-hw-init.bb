@@ -8,11 +8,12 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI = " \
     file://tiogapass-hw-init.sh \
     file://tiogapass-hw-init.service \
+    file://tiogapass-clear-vr-faults.service \
 "
 
 inherit systemd
 
-SYSTEMD_SERVICE:${PN} = "tiogapass-hw-init.service"
+SYSTEMD_SERVICE:${PN} = "tiogapass-hw-init.service tiogapass-clear-vr-faults.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 do_install() {
@@ -22,9 +23,12 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/tiogapass-hw-init.service \
         ${D}${systemd_system_unitdir}/tiogapass-hw-init.service
+    install -m 0644 ${WORKDIR}/tiogapass-clear-vr-faults.service \
+        ${D}${systemd_system_unitdir}/tiogapass-clear-vr-faults.service
 }
 
 FILES:${PN} = " \
     ${bindir}/tiogapass-hw-init.sh \
     ${systemd_system_unitdir}/tiogapass-hw-init.service \
+    ${systemd_system_unitdir}/tiogapass-clear-vr-faults.service \
 "

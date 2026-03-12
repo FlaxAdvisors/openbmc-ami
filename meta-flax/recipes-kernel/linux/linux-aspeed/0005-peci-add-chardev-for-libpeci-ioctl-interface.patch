@@ -1,0 +1,391 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenBMC Build <openbmc@build>
+Date: Thu, 06 Mar 2026 00:00:00 +0000
+Subject: [PATCH] peci: add chardev for libpeci ioctl interface
+
+Linux 6.6's PECI subsystem removed the character device interface that
+libpeci and intelcpusensor rely on (/dev/peci-0, /dev/peci-default).
+Restore it by:
+
+1. Exporting peci_bus_type and peci_controller_type from core.c.
+2. Adding drivers/peci/peci-chardev.c (CONFIG_PECI_CHARDEV) which
+   registers /dev/peci-0 and implements PING, GET_DIB, GET_TEMP,
+   RD_PKG_CFG, and raw XFER ioctls compatible with libpeci's peci-ioctl.h.
+
+The chardev calls ops->xfer directly while holding controller->bus_lock,
+so it works without needing pre-existing peci_device objects.
+
+Signed-off-by: OpenBMC Build <openbmc@build>
+---
+ drivers/peci/Kconfig        |  12 +++
+ drivers/peci/Makefile       |   1 +
+ drivers/peci/core.c         |   2 +
+ drivers/peci/peci-chardev.c | 305 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 320 insertions(+)
+ create mode 100644 drivers/peci/peci-chardev.c
+
+diff --git a/drivers/peci/Kconfig b/drivers/peci/Kconfig
+index aaa1111..bbb2222 100644
+--- a/drivers/peci/Kconfig
++++ b/drivers/peci/Kconfig
+@@ -31,6 +31,17 @@ config PECI_CPU
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called peci-cpu.
+ 
++config PECI_CHARDEV
++	tristate "PECI character device interface"
++	depends on PECI
++	default y
++	help
++	  Enables /dev/peci-0 with ioctl API compatible with libpeci's peci-ioctl.h.
++	  Allows tools like intelcpusensor to communicate with the PECI bus.
++	  Also create a udev rule: KERNEL=="peci-0", SYMLINK+="peci-default"
++
++	  Say Y unless you know you do not need it.
++
+ source "drivers/peci/controller/Kconfig"
+ 
+ endif # PECI
+diff --git a/drivers/peci/Makefile b/drivers/peci/Makefile
+index ccc3333..ddd4444 100644
+--- a/drivers/peci/Makefile
++++ b/drivers/peci/Makefile
+@@ -5,6 +5,7 @@ obj-$(CONFIG_PECI)	+= peci.o
+ obj-$(CONFIG_PECI) += peci.o
+ peci-cpu-y := cpu.o
+ obj-$(CONFIG_PECI_CPU) += peci-cpu.o
+ 
++obj-$(CONFIG_PECI_CHARDEV) += peci-chardev.o
+ # Hardware specific bus drivers
+ obj-y += controller/
+diff --git a/drivers/peci/core.c b/drivers/peci/core.c
+index eee5555..fff6666 100644
+--- a/drivers/peci/core.c
++++ b/drivers/peci/core.c
+@@ -28,6 +28,7 @@ struct device_type peci_controller_type = {
+ struct device_type peci_controller_type = {
+ 	.release	= peci_controller_dev_release,
+ };
++EXPORT_SYMBOL_NS_GPL(peci_controller_type, PECI);
+ 
+ int peci_controller_scan_devices(struct peci_controller *controller)
+ {
+@@ -208,6 +209,7 @@ struct bus_type peci_bus_type = {
+ 	.remove		= peci_bus_device_remove,
+ 	.bus_groups	= peci_bus_groups,
+ };
++EXPORT_SYMBOL_NS_GPL(peci_bus_type, PECI);
+ 
+ static int __init peci_init(void)
+ {
+diff --git a/drivers/peci/peci-chardev.c b/drivers/peci/peci-chardev.c
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/drivers/peci/peci-chardev.c
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * PECI character device for libpeci compatibility.
++ *
++ * Provides /dev/peci-0 with the ioctl API from peci-ioctl.h so that
++ * libpeci / intelcpusensor work with the Linux 6.x PECI subsystem.
++ *
++ * libpeci looks for /dev/peci-default first, /dev/peci-0 as fallback.
++ * Create the symlink with a udev rule:
++ *   KERNEL=="peci-0", SYMLINK+="peci-default"
++ */
++
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/notifier.h>
++#include <linux/peci.h>
++#include <linux/slab.h>
++#include <linux/uaccess.h>
++#include <asm/unaligned.h>
++
++/* Exported by core.c */
++extern struct bus_type peci_bus_type;
++extern struct device_type peci_controller_type;
++
++/* ---- ioctl definitions matching libpeci's linux/peci-ioctl.h ---- */
++#define PECI_IOC_BASE			0xb8
++
++#define PECI_CMD_XFER			0
++#define PECI_CMD_PING			1
++#define PECI_CMD_GET_DIB		2
++#define PECI_CMD_GET_TEMP		3
++#define PECI_CMD_RD_PKG_CFG		4
++
++#define PECI_GET_DIB_CMD		0xf7
++#define PECI_GET_DIB_WR_LEN		1
++#define PECI_GET_DIB_RD_LEN		8
++
++#define PECI_GET_TEMP_CMD		0x01
++#define PECI_GET_TEMP_WR_LEN		1
++#define PECI_GET_TEMP_RD_LEN		2
++
++#define PECI_RDPKGCFG_CMD		0xa1
++#define PECI_RDPKGCFG_WRITE_LEN		5
++#define PECI_RDPKGCFG_READ_LEN_BASE	1
++#define PECI_RDPKGCFG_PKGCFG_LEN	8
++
++/* ---- ioctl structs (layout must match libpeci peci-ioctl.h exactly) ---- */
++
++struct peci_ping_msg {
++	__u8	addr;
++	__u8	padding[3];
++} __packed;
++
++struct peci_get_dib_msg {
++	__u8	addr;
++	__u8	padding[3];
++	__u64	dib;	/* raw 8-byte PECI response; CC is lowest byte */
++} __packed;
++
++struct peci_get_temp_msg {
++	__u8	addr;
++	__u8	padding;
++	__s16	temp_raw; /* raw 2-byte PECI response; CC is lowest byte */
++} __packed;
++
++struct peci_rd_pkg_cfg_msg {
++	__u8	addr;
++	__u8	index;
++	__u16	param;
++	__u8	rx_len;
++	__u8	cc;
++	__u8	padding[2];
++	__u8	pkg_config[PECI_RDPKGCFG_PKGCFG_LEN];
++	__u8	domain_id;
++	__u8	padding1[3];
++} __packed;
++
++struct peci_xfer_msg {
++	__u8		addr;
++	__u8		tx_len;
++	__u8		rx_len;
++	__u8		padding;
++	__u8 __user	*tx_buf;
++	__u8 __user	*rx_buf;
++} __packed;
++
++#define PECI_IOC_PING \
++	_IOWR(PECI_IOC_BASE, PECI_CMD_PING, struct peci_ping_msg)
++#define PECI_IOC_GET_DIB \
++	_IOWR(PECI_IOC_BASE, PECI_CMD_GET_DIB, struct peci_get_dib_msg)
++#define PECI_IOC_GET_TEMP \
++	_IOWR(PECI_IOC_BASE, PECI_CMD_GET_TEMP, struct peci_get_temp_msg)
++#define PECI_IOC_RD_PKG_CFG \
++	_IOWR(PECI_IOC_BASE, PECI_CMD_RD_PKG_CFG, struct peci_rd_pkg_cfg_msg)
++#define PECI_IOC_XFER \
++	_IOWR(PECI_IOC_BASE, PECI_CMD_XFER, struct peci_xfer_msg)
++
++/* ---- module state ---- */
++static struct peci_controller *g_ctrl;
++static DEFINE_MUTEX(g_lock);
++
++/* Execute a raw PECI transfer.  Caller must hold ctrl->bus_lock. */
++static int peci_raw_xfer(struct peci_controller *ctrl, u8 addr,
++			 const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len)
++{
++	struct peci_request *req;
++	int ret;
++
++	req = kzalloc(sizeof(*req), GFP_KERNEL);
++	if (!req)
++		return -ENOMEM;
++
++	req->tx.len = tx_len;
++	req->rx.len = rx_len;
++	if (tx_len && tx)
++		memcpy(req->tx.buf, tx, tx_len);
++
++	ret = ctrl->ops->xfer(ctrl, addr, req);
++	if (!ret && rx_len && rx)
++		memcpy(rx, req->rx.buf, rx_len);
++
++	kfree(req);
++	return ret;
++}
++
++static long peci_chardev_ioctl(struct file *file, unsigned int cmd,
++			       unsigned long arg)
++{
++	void __user *argp = (void __user *)arg;
++	struct peci_controller *ctrl;
++	int ret;
++
++	mutex_lock(&g_lock);
++	ctrl = g_ctrl;
++	if (!ctrl) {
++		mutex_unlock(&g_lock);
++		return -ENODEV;
++	}
++	mutex_lock(&ctrl->bus_lock);
++	mutex_unlock(&g_lock);
++
++	switch (cmd) {
++	case PECI_IOC_PING: {
++		struct peci_ping_msg m;
++
++		ret = copy_from_user(&m, argp, sizeof(m)) ? -EFAULT : 0;
++		if (!ret)
++			ret = peci_raw_xfer(ctrl, m.addr, NULL, 0, NULL, 0);
++		break;
++	}
++	case PECI_IOC_GET_DIB: {
++		struct peci_get_dib_msg m;
++		u8 tx = PECI_GET_DIB_CMD;
++		u8 rx[PECI_GET_DIB_RD_LEN];
++
++		ret = copy_from_user(&m, argp, sizeof(m)) ? -EFAULT : 0;
++		if (ret)
++			break;
++		ret = peci_raw_xfer(ctrl, m.addr, &tx, 1, rx, sizeof(rx));
++		if (!ret) {
++			m.dib = get_unaligned_le64(rx);
++			if (copy_to_user(argp, &m, sizeof(m)))
++				ret = -EFAULT;
++		}
++		break;
++	}
++	case PECI_IOC_GET_TEMP: {
++		struct peci_get_temp_msg m;
++		u8 tx = PECI_GET_TEMP_CMD;
++		u8 rx[PECI_GET_TEMP_RD_LEN];
++
++		ret = copy_from_user(&m, argp, sizeof(m)) ? -EFAULT : 0;
++		if (ret)
++			break;
++		ret = peci_raw_xfer(ctrl, m.addr, &tx, 1, rx, sizeof(rx));
++		if (!ret) {
++			m.temp_raw = (__s16)get_unaligned_le16(rx);
++			if (copy_to_user(argp, &m, sizeof(m)))
++				ret = -EFAULT;
++		}
++		break;
++	}
++	case PECI_IOC_RD_PKG_CFG: {
++		struct peci_rd_pkg_cfg_msg m;
++		u8 tx[PECI_RDPKGCFG_WRITE_LEN];
++		u8 rx[PECI_RDPKGCFG_READ_LEN_BASE + PECI_RDPKGCFG_PKGCFG_LEN];
++		u8 rd_len;
++
++		ret = copy_from_user(&m, argp, sizeof(m)) ? -EFAULT : 0;
++		if (ret)
++			break;
++		tx[0] = PECI_RDPKGCFG_CMD;
++		tx[1] = 0; /* host ID */
++		tx[2] = m.index;
++		put_unaligned_le16(m.param, &tx[3]);
++		rd_len = PECI_RDPKGCFG_READ_LEN_BASE +
++			 min_t(u8, m.rx_len, PECI_RDPKGCFG_PKGCFG_LEN);
++		ret = peci_raw_xfer(ctrl, m.addr, tx, sizeof(tx), rx, rd_len);
++		if (!ret) {
++			m.cc = rx[0];
++			memcpy(m.pkg_config, &rx[1],
++			       min_t(u8, m.rx_len, PECI_RDPKGCFG_PKGCFG_LEN));
++			if (copy_to_user(argp, &m, sizeof(m)))
++				ret = -EFAULT;
++		}
++		break;
++	}
++	case PECI_IOC_XFER: {
++		struct peci_xfer_msg m;
++		u8 tx_buf[255], rx_buf[255];
++
++		ret = copy_from_user(&m, argp, sizeof(m)) ? -EFAULT : 0;
++		if (ret)
++			break;
++		if (m.tx_len &&
++		    copy_from_user(tx_buf, m.tx_buf, m.tx_len)) {
++			ret = -EFAULT;
++			break;
++		}
++		ret = peci_raw_xfer(ctrl, m.addr,
++				    m.tx_len ? tx_buf : NULL, m.tx_len,
++				    m.rx_len ? rx_buf : NULL, m.rx_len);
++		if (!ret && m.rx_len &&
++		    copy_to_user(m.rx_buf, rx_buf, m.rx_len))
++			ret = -EFAULT;
++		break;
++	}
++	default:
++		ret = -ENOTTY;
++	}
++
++	mutex_unlock(&ctrl->bus_lock);
++	return ret;
++}
++
++static const struct file_operations peci_chardev_fops = {
++	.owner		= THIS_MODULE,
++	.unlocked_ioctl	= peci_chardev_ioctl,
++	.llseek		= no_llseek,
++};
++
++static struct miscdevice peci_miscdev = {
++	.minor	= MISC_DYNAMIC_MINOR,
++	.name	= "peci-0",
++	.fops	= &peci_chardev_fops,
++	.mode	= 0600,
++};
++
++static int peci_chardev_notify(struct notifier_block *nb, unsigned long action,
++			       void *data)
++{
++	struct device *dev = data;
++
++	if (dev->type != &peci_controller_type)
++		return NOTIFY_DONE;
++
++	if (action == BUS_NOTIFY_ADD_DEVICE) {
++		mutex_lock(&g_lock);
++		if (!g_ctrl)
++			g_ctrl = to_peci_controller(dev);
++		mutex_unlock(&g_lock);
++	} else if (action == BUS_NOTIFY_REMOVED_DEVICE) {
++		mutex_lock(&g_lock);
++		if (g_ctrl == to_peci_controller(dev))
++			g_ctrl = NULL;
++		mutex_unlock(&g_lock);
++	}
++	return NOTIFY_OK;
++}
++
++static struct notifier_block peci_chardev_nb = {
++	.notifier_call = peci_chardev_notify,
++};
++
++static int __init peci_chardev_init(void)
++{
++	int ret;
++
++	ret = misc_register(&peci_miscdev);
++	if (ret)
++		return ret;
++
++	ret = bus_register_notifier(&peci_bus_type, &peci_chardev_nb);
++	if (ret) {
++		misc_deregister(&peci_miscdev);
++		return ret;
++	}
++	return 0;
++}
++
++static void __exit peci_chardev_exit(void)
++{
++	bus_unregister_notifier(&peci_bus_type, &peci_chardev_nb);
++	misc_deregister(&peci_miscdev);
++}
++
++module_init(peci_chardev_init);
++module_exit(peci_chardev_exit);
++
++MODULE_AUTHOR("OpenBMC");
++MODULE_DESCRIPTION("PECI chardev ioctl interface for libpeci compatibility");
++MODULE_LICENSE("GPL v2");
++MODULE_IMPORT_NS(PECI);

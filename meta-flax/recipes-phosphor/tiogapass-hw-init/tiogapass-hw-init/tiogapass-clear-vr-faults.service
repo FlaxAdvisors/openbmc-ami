@@ -1,0 +1,14 @@
+[Unit]
+Description=Clear PMBus faults on TiogaPass CPU voltage regulators
+# Run when chassis powers on so SMBALERT# de-asserts and the I2C IRQ storm stops.
+After=obmc-chassis-poweron@0.target
+PartOf=obmc-chassis-poweron@0.target
+
+[Service]
+Type=oneshot
+# PMBus CLEAR_FAULTS (0x03) de-asserts SMBALERT# on Infineon PXE1610 VRs.
+# Errors are suppressed: VRs not present or not powered → silently skip.
+ExecStart=/bin/sh -c 'for a in 0x48 0x4a 0x50 0x52 0x58 0x5a 0x68 0x70 0x72; do i2cset -y 5 $a 0x03 2>/dev/null || true; done'
+
+[Install]
+WantedBy=obmc-chassis-poweron@0.target

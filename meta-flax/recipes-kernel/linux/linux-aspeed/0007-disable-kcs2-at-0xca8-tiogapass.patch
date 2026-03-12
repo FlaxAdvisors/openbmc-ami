@@ -1,0 +1,41 @@
+From: local <local@local>
+Date: Mon, 10 Mar 2026 00:00:00 +0000
+Subject: [PATCH] ARM: dts: aspeed: tiogapass: disable KCS2 at 0xCA8
+
+TiogaPass only uses KCS3 (0xCA2) for host IPMI.  KCS2 was enabled in
+the upstream DTS at 0xCA8 but there is no BMC userspace handler for it
+(kcsbridged only runs for KCS3).
+
+When FM_BMC_READY_N is properly asserted, the host BIOS fully initialises
+and populates the SMBIOS IPMI entry pointing at 0xCA8.  The host kernel's
+ipmi_si driver probes 0xCA8, finds ASPEED KCS2 hardware responding
+(HICR0 LPC2E bit set = ACKs LPC cycles), sends "Get Device ID", and
+waits for OBF which is never set because no BMC code reads the incoming
+message.  ipmi_si registers this dead interface as /dev/ipmi0.  Any
+ipmitool call on the host uses /dev/ipmi0 and hangs indefinitely,
+preventing the host OS from completing boot.
+
+Disable KCS2 so the ASPEED hardware ignores LPC cycles at 0xCA8.
+ipmi_si reads 0xFF, determines no hardware is present, and falls through
+to KCS3 at 0xCA2 which has a working BMC userspace handler.
+
+Signed-off-by: local <local@local>
+---
+ arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -125,9 +125,8 @@
+ };
+
+ &kcs2 {
+-	// BMC KCS channel 2
+-	status = "okay";
+-	aspeed,lpc-io-reg = <0xca8>;
++	// BMC KCS channel 2 - disabled: no userspace handler, would hang host ipmi_si at 0xCA8
++	status = "disabled";
+ };
+
+ &kcs3 {

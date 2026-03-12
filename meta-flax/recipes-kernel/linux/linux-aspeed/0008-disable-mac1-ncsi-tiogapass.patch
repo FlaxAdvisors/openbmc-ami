@@ -1,0 +1,28 @@
+From: local <local@local>
+Date: Mon, 10 Mar 2026 00:00:00 +0000
+Subject: [PATCH] ARM: dts: aspeed: tiogapass: disable mac1 (eth1)
+
+TiogaPass BMC management runs over mac0 (eth0) via the OCP NIC NCSI
+channel.  mac1 (eth1) has no NCSI device connected and no clock
+configuration, causing continuous NCSI Channel 0 timeout messages and
+NETDEV WATCHDOG transmit queue stalls in the BMC kernel log.
+
+Disable mac1 so the driver does not probe it.
+
+Signed-off-by: local <local@local>
+---
+ arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -212,7 +212,7 @@
+ };
+
+ &mac1 {
+-	status = "okay";
++	status = "disabled";
+
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_rmii2_default>;
