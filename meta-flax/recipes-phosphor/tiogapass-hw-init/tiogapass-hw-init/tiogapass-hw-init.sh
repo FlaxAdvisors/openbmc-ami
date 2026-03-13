@@ -13,6 +13,20 @@ gpio_out() {
     echo "$2" > /sys/class/gpio/gpio${GPIO_NUM}/direction 2>/dev/null || true
 }
 
+# Ensure /dev/mem is available for devmem calls below
+if [ ! -c /dev/mem ]; then
+    mknod /dev/mem c 1 1
+    chmod 600 /dev/mem
+fi
+
+# Assert VUART MCR DTR+RTS+OUT2 so the host side sees DCD=1 on ttyS0.
+# ASPEED VUART is a virtual null-modem: BMC MCR.DTR → HOST MSR.DCD.
+# Without this, agetty (started by Ubuntu initrd systemd for console=ttyS0)
+# opens ttyS0 blocking on DCD=0 and stalls for exactly TimeoutStartSec=30s.
+# This write is belt-and-suspenders alongside After=obmc-console@ttyVUART0.service.
+# VUART MCR is at 0x1E787000 + (4 << reg-shift-2) = 0x1E787010.
+devmem 0x1e787010 8 0x0b 2>/dev/null || true
+
 # FM_BMC_READY_N (GPIO S1 = base+145): active-low, drive LOW to signal BMC ready.
 # Without this, host BIOS polls for BMC ready at multiple POST checkpoints and
 # waits for timeout each time, causing progressive host boot slowdown.
@@ -26,12 +40,6 @@ gpio_out 212 high
 # The kernel lpc_snoop driver handles /dev/aspeed-lpc-snoop0 (software
 # post code reading), but the physical debug card 7-segment display
 # needs these additional register writes (from meta-megarac U-Boot patch).
-
-# Ensure /dev/mem is available
-if [ ! -c /dev/mem ]; then
-    mknod /dev/mem c 1 1
-    chmod 600 /dev/mem
-fi
 
 # --- Clear PMBus faults on CPU voltage regulators (I2C bus 5) ---
 # The Infineon PXE1610 VRs assert SMBALERT# after CPU power-on, causing

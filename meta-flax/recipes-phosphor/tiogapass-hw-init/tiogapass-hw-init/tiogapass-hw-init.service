@@ -1,7 +1,8 @@
 [Unit]
 Description=TiogaPass hardware initialization (GPIO setup, LPC port 80h redirect)
 DefaultDependencies=no
-After=systemd-udevd.service phosphor-ipmi-kcs@ipmi_kcs3.service
+After=systemd-udevd.service phosphor-ipmi-kcs@ipmi_kcs3.service obmc-console@ttyVUART0.service
+Wants=obmc-console@ttyVUART0.service
 Before=multi-user.target
 
 [Service]
