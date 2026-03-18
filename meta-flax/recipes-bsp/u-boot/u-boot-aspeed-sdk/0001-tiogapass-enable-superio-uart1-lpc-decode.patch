@@ -1,0 +1,84 @@
+From a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3 Mon Sep 17 00:00:00 2001
+From: OpenBMC Build <openbmc@build>
+Date: Mon, 17 Mar 2026 00:00:00 +0000
+Subject: [PATCH] board: aspeed: tiogapass: enable SuperIO UART1 LPC decode
+
+Configure the ASPEED AST2500 LPC Host Interface registers to enable
+SuperIO UART1 at 0x3F8/IRQ4 for host serial console, matching the
+working AMI production BMC firmware.
+
+Without these writes, the SuperIO UART1 is not decoded on the LPC bus
+and the host has no functional COM1 - BIOS splash and serial console
+are invisible.
+
+Key changes:
+- SCU70 (HW_STRAP1) bit 20: CLEAR to enable SuperIO LPC decode.
+  Hardware straps on TiogaPass default bit 20 high.  Must be done
+  while the SCU is unlocked in multipin_configuration().
+- SCU8C bit 12: SET (enable UART1 decode pin function) instead of CLEAR
+- HICR5 (0x1e789080) bit 1: enable LPC UART1 decode
+- HICR0 (0x1e789000) bit 6: enable LPC host UART1 interface
+- HICR2 (0x1e789008) bit 2: enable LPC UART1 interrupt
+- HICR4 (0x1e789010) bit 7: enable SuperIO UART1 address decode
+- HICRB (0x1e789094): configure SuperIO UART1 address/IRQ mapping
+
+Register 0x1e789094 is read-only from Linux - it MUST be configured
+in U-Boot.
+
+Signed-off-by: OpenBMC Build <openbmc@build>
+---
+ board/aspeed/evb_ast2500/tiogapass.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+--- a/board/aspeed/evb_ast2500/tiogapass.c
++++ b/board/aspeed/evb_ast2500/tiogapass.c
+@@ -178,7 +178,7 @@
+ 	reg32 = reg32 & ~(1<<15);  /* Enable GPIOE6 pass-through to GPIOE7 function */                       \
+ 	reg32 = reg32 & ~(1<<14);  /* Enable GPIOE4 pass-through to GPIOE5 function */                       \
+ 	reg32 = reg32 & ~(1<<13);  /* Enable GPIOE2 pass-through to GPIOE3 function */                       \
+-	reg32 = reg32 & ~(1<<12);  /* Enable GPIOE0 pass-through to GPIOE1 function */                       \
++	reg32 = reg32 |  (1<<12);  /* Enable UART1 decode on LPC bus (SuperIO UART1)  */                       \
+ 	reg32 = reg32 & ~(1<<11);  /* Enable GPIOD6 pass-through to GPIOD7 function */                       \
+ 	reg32 = reg32 & ~(1<<10);  /* Enable GPIOD4 pass-through to GPIOD5 function */                       \
+ 	reg32 = reg32 & ~(1<<9);   /* Enable GPIOD2 pass-through to GPIOD3 function */                       \
+@@ -349,7 +349,11 @@
+ 	reg32 |= 0x20000000; 																				 \
+ 	*((volatile u_long *) (SCU_REG_BASE + SCU_MISC_CONTROL)) = reg32;                                    \
+     																									 \
+-	*((volatile u_long *) SCU_REG_BASE) = 0x00000000;	/*lock SCU */									 \
++	/* Clear HW_STRAP1 bit 20: enable SuperIO LPC decode (SCU still unlocked) */                         \
++	reg32 = *((volatile u_long *) (SCU_REG_BASE + SCU_HARDWARE_STRAP));                                  \
++	reg32 &= ~(1 << 20);                                                                                \
++	*((volatile u_long *) (SCU_REG_BASE + SCU_HARDWARE_STRAP)) = reg32;                                  \
++	*((volatile u_long *) SCU_REG_BASE) = 0x00000000;	/*lock SCU */                                    \
+ 																										 		\
+                                                                                                         		\
+ 	/* config GPIO data and direction */                                                                 		\
+@@ -368,7 +372,7 @@
+ 																												\
+     /* enable snoop */																							\
+     *((volatile ulong *) (0x1e789090)) = 0x80;																	\
+-    *((volatile ulong *) (0x1e789080)) = 0x01;																	\
++    *((volatile ulong *) (0x1e789080)) = 0x03;  /* bit 0: snoop, bit 1: LPC UART1 */																	\
+ 																												\
+ 	/* Set Uart1 to debug console */																			\
+     *(volatile ulong *) (LPC_REG_BASE + HICRA_OFFSET ) &=  0xF0F0FFFF;											\
+@@ -377,6 +381,16 @@
+     *((volatile ulong*)(0x1e789080)) &= ~(0xFF000000);															\
+     *((volatile ulong*)(0x1e789080)) |= ((1 << 31) | (1 << 30) | (7 << 24)) ;								    \
+     /*--- end of port 80 re-direction ---*/																		\
++    /*--- SuperIO UART1 LPC decode (host COM1 at 0x3F8/IRQ4) ---*/                                             \
++    /* HICR0: set bit 6 - enable LPC host UART interface */                                                     \
++    *((volatile ulong *) (0x1e789000)) |= (1 << 6);                                                            \
++    /* HICR2: set bit 2 - enable LPC UART1 interrupt */                                                         \
++    *((volatile ulong *) (0x1e789008)) |= (1 << 2);                                                            \
++    /* HICR4: set bit 7 - enable SuperIO UART1 address decode */                                                \
++    *((volatile ulong *) (0x1e789010)) |= (1 << 7);                                                            \
++    /* HICRB: SuperIO UART1 address/IRQ mapping (read-only from Linux) */                                       \
++    *((volatile ulong *) (0x1e789094)) = 0xFFEFFFD5;                                                           \
++    /*--- end of SuperIO UART1 config ---*/                                                                     \
+                                                                                                            		\
+ 	/* config simple GPIO 0 data and direction */                                                        		\
+ 	*(volatile ulong *) (GPIO_REG_BASE + GPIOIJKL_OFFSET + GPIO_DAT) |= 0x20000004;  /* Data: GPIOLKJI */ 		\
+--
+2.25.1

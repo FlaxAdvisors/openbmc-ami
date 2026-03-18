@@ -19,13 +19,8 @@ if [ ! -c /dev/mem ]; then
     chmod 600 /dev/mem
 fi
 
-# Assert VUART MCR DTR+RTS+OUT2 so the host side sees DCD=1 on ttyS0.
-# ASPEED VUART is a virtual null-modem: BMC MCR.DTR → HOST MSR.DCD.
-# Without this, agetty (started by Ubuntu initrd systemd for console=ttyS0)
-# opens ttyS0 blocking on DCD=0 and stalls for exactly TimeoutStartSec=30s.
-# This write is belt-and-suspenders alongside After=obmc-console@ttyVUART0.service.
-# VUART MCR is at 0x1E787000 + (4 << reg-shift-2) = 0x1E787010.
-devmem 0x1e787010 8 0x0b 2>/dev/null || true
+# Note: Host console uses SuperIO UART1 (0x3F8) via LPC decode, not VUART.
+# VUART is parked at 0xDCBB and does not need MCR configuration.
 
 # FM_BMC_READY_N (GPIO S1 = base+145): active-low, drive LOW to signal BMC ready.
 # Without this, host BIOS polls for BMC ready at multiple POST checkpoints and

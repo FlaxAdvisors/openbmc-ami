@@ -8,28 +8,23 @@ over the LPC bus. Enable the ASPEED VUART to intercept these LPC UART
 cycles and expose the host console as /dev/ttyVUART0.
 
 ---
- arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 14 ++++++++++++++
- 1 file changed, 14 insertions(+)
+ arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
 
 diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
 --- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
 +++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
-@@ -55,6 +55,20 @@
+@@ -55,6 +55,15 @@
  &uart_routing {
          status = "okay";
  };
-
+ 
 +&vuart {
-+	/* Host console via LPC COM1 (0x3F8) emulation.
-+	 * Use SIRQ 0 instead of the default SIRQ 4: SERIRQ0 is not routed
-+	 * to COM1's IRQ4 by the host PCH, so the host 8250 driver never
-+	 * receives the TX-empty interrupt and falls back to polling mode.
-+	 * This prevents the continuous SERIRQ4 assertion that causes
-+	 * 30-second udev-settle timeouts during host Linux boot.
-+	 * BIOS console redirect (TX-only) works fine without host SIRQ.
++	/* VUART parked at junk LPC address -- does NOT shadow SuperIO UART1.
++	 * Host console: SuperIO UART1 (0x3F8) -> UART routing -> ttyS1.
 +	 */
 +	status = "okay";
-+	aspeed,lpc-io-reg = <0x3f8>;
++	aspeed,lpc-io-reg = <0xdcbb>;
 +	aspeed,lpc-interrupts = <0 8>; /* 8 = IRQ_TYPE_LEVEL_LOW */
 +};
 +

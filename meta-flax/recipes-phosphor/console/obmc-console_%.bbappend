@@ -1,28 +1,31 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-# meta-facebook/conf/recipes/fb-consoles.inc sets OBMC_CONSOLE_HOST_TTY = "ttyS2"
-# and OBMC_CONSOLE_TTYS = "${@fb_get_consoles(d)}" (direct assignments, not ?=).
-# TiogaPass uses VUART for host console: Intel Xeon D PCH emulates COM1 (0x3F8)
-# over LPC bus → ASPEED VUART intercepts it → /dev/ttyVUART0 on the BMC.
-# Physical UART routing does not work: ASPEED UART1 physical pins are not
-# connected to the host PCH UART on the TiogaPass board.
-# VUART is configured with SIRQ=0 (patch 0003) to prevent the continuous
-# SERIRQ4 TX-empty assertion that caused 30-second host boot stalls.
-OBMC_CONSOLE_HOST_TTY:tiogapass = "ttyVUART0"
-OBMC_CONSOLE_TTYS:tiogapass = "ttyVUART0"
-SYSTEMD_SERVICE:${PN}:tiogapass = "obmc-console@ttyVUART0.service"
+# TiogaPass host console path:
+#   Host LPC COM1 (0x3F8) -> ASPEED SuperIO (enabled by CONFIG_ASPEED_ENABLE_SUPERIO)
+#   -> uart1 TX path -> uart_routing: uart2 input = uart1
+#   -> UART2 = /dev/ttyS1 -> obmc-console
+# SuperIO is enabled by keeping HW_STRAP1 bit 20 clear in U-Boot (via
+# CONFIG_ASPEED_ENABLE_SUPERIO=y in tiogapass.cfg).
+OBMC_CONSOLE_HOST_TTY:tiogapass = "ttyS1"
+OBMC_CONSOLE_TTYS:tiogapass = "ttyS1"
+SYSTEMD_SERVICE:${PN}:tiogapass = "obmc-console@ttyS1.service"
 
-SRC_URI:append:tiogapass = " \
-    file://obmc-console@.service \
-"
+SRC_URI:append:tiogapass = " file://sol-configure.sh "
 
 do_install:append:tiogapass() {
-    # console-id = default so netipmid and bmcweb find the socket at
-    # /run/obmc-console/default
-    echo "console-id = default" >> ${D}${sysconfdir}/obmc-console/server.ttyVUART0.conf
-    echo "console-id = default" >> ${D}${sysconfdir}/obmc-console.conf
+    # Install our sol-configure.sh (overrides meta-common version)
+    install -m 0755 ${WORKDIR}/sol-configure.sh ${D}${bindir}/sol-configure.sh
 
-    # Mask obmc-console@ttyS2 to prevent socket activation conflict.
+    # Write a clean server.ttyS1.conf (baud set at runtime by sol-configure.sh setup)
+    printf 'baud = 115200\nconsole-id = default\n' \
+        > ${D}${sysconfdir}/obmc-console/server.ttyS1.conf
+
+    # obmc-console.conf: clean top-level config
+    printf 'baud = 115200\nconsole-id = default\n' \
+        > ${D}${sysconfdir}/obmc-console.conf
+
+    # Mask ttyS2 and ttyVUART0 — only ttyS1 should run
     install -d ${D}${sysconfdir}/systemd/system
     ln -sf /dev/null ${D}${sysconfdir}/systemd/system/obmc-console@ttyS2.service
+    ln -sf /dev/null ${D}${sysconfdir}/systemd/system/obmc-console@ttyVUART0.service
 }

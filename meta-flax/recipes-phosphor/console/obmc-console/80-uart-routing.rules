@@ -1,10 +1,10 @@
-# Route ASPEED UART crossbar: uart1 (LPC COM1/0x3F8) <-> uart3 (ttyS2/BMC SOL)
-# Also route uart4 <-> io1 for the SoL BMC side.
+# Route ASPEED UART crossbar: uart1 <-> uart2, uart4 <-> io1
+# SuperIO (LPC COM1 0x3F8) feeds into uart1 TX path in crossbar.
+# uart2 receives from uart1 -> ttyS1 -> obmc-console gets host console data.
 # This fires when the uart_routing platform driver binds, before services start.
 # ROUTER path matches sol-configure.sh: /sys/bus/platform/drivers/aspeed-uart-routing/*.uart-routing
 ACTION=="add", SUBSYSTEM=="platform", DRIVER=="aspeed-uart-routing", \
-    RUN+="/bin/sh -c 'R=/sys/bus/platform/drivers/aspeed-uart-routing/%k; echo uart3 > $R/uart1; echo uart1 > $R/uart3; echo io1 > $R/uart4; echo uart4 > $R/io1'"
+    RUN+="/bin/sh -c 'R=/sys/bus/platform/drivers/aspeed-uart-routing/%k; echo uart2 > $R/uart1; echo uart1 > $R/uart2; echo io1 > $R/uart4; echo uart4 > $R/io1'"
 
-# Tag ttyS2 so systemd creates a device unit (dev-ttyS2.device) for it.
-# Standard platform UARTs don't generate hotplug events by default.
-SUBSYSTEM=="tty", KERNEL=="ttyS2", TAG+="systemd"
+# Tag ttyS1 so systemd creates a device unit (dev-ttyS1.device) for it.
+SUBSYSTEM=="tty", KERNEL=="ttyS1", TAG+="systemd"

@@ -4,8 +4,9 @@ BindsTo=dev-%i.device
 After=dev-%i.device
 
 [Service]
-ExecStartPre=/usr/bin/sol-option-check.sh
+ExecStartPre=/usr/bin/sol-configure.sh setup
 ExecStart=/usr/bin/env obmc-console-server --config /etc/obmc-console.conf %i
+ExecStopPost=/usr/bin/sol-configure.sh teardown
 SyslogIdentifier=obmc-console-server
 Restart=always
 
