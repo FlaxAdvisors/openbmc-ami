@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TiogaPass <tiogapass@flax.local>
+Date: Wed, 28 Feb 2024 17:00:00 +0000
+Subject: [PATCH] Default SEL enabled when globalenables D-Bus object missing
+
+The AMI Global Enables setting object is not available on TiogaPass.
+Default to SEL enabled instead of disabled when the property cannot
+be read.
+
+---
+ log_manager.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/log_manager.cpp b/log_manager.cpp
+index 1234567..abcdefg 100644
+--- a/log_manager.cpp
++++ b/log_manager.cpp
+@@ -453,7 +453,7 @@ void Manager::commit(uint64_t transactionId, std::string errMsg,
+         catch (const sdbusplus::exception_t& e)
+         {
+             lg2::error("Failed to get D-Bus property:{ERROR}", "ERROR", e);
+-            selEnabled = false;
++            selEnabled = true;
+         }
+         if (!selEnabled)
+         {

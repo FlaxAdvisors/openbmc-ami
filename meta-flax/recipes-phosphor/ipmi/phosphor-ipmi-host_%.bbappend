@@ -10,4 +10,5 @@ SRC_URI += " \
             file://0003-fix-chassis-power-restore-crash.patch \
             file://0004-fix-allowlist-empty-restricted-mode.patch \
             file://0005-fix-sdr-empty-sensor-table-crash.patch \
+            file://0006-restore-sel-cache-init.patch \
 "

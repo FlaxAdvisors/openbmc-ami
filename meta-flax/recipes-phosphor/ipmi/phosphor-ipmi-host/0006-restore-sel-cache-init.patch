@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TiogaPass <tiogapass@flax.local>
+Date: Wed, 28 Feb 2024 19:00:00 +0000
+Subject: [PATCH] Restore SEL cache initialization for ipmi-host SEL support
+
+AMI patch 0001-removing-sel-callbacks-update.patch commented out
+initSELCache() because they use intel-ipmi-oem for SEL handling.
+We use the ipmi-host implementation, so restore it.
+
+---
+ storagehandler.cpp | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/storagehandler.cpp b/storagehandler.cpp
+--- a/storagehandler.cpp
++++ b/storagehandler.cpp
+@@ -887,9 +887,7 @@
+ void register_netfn_storage_functions()
+ {
+     selCacheMapInitialized = false;
+-//    initSELCache();  //TODO: Currently using intel-ipmi-oem so initilization and registering callbacks
+-    			// is not required for ipmi-host, it can be uncommented if ipmi-host implementation
+-    			// will be used. 
++    initSELCache();
+     // Handlers with dbus-sdr handler implementation.
+     // Do not register the hander if it dynamic sensors stack is used.
+ 
