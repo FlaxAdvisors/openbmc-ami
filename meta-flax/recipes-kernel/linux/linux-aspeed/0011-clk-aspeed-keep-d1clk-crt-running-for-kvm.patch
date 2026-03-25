@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Mon, 24 Mar 2026 00:00:00 +0000
+Subject: [PATCH] clk: aspeed: mark D1CLK (CRT1) as critical for KVM capture
+
+The ASPEED video engine needs the CRT1 display controller to be
+active for mode detection and frame capture (both sync and direct
+fetch modes).  Without the gfx DTS node enabled, nothing claims
+D1CLK, so the clock framework gates it during late init -- killing
+the CRT signal and stopping KVM video capture after one frame.
+
+Mark D1CLK as CLK_IS_CRITICAL so it is never gated.
+
+Signed-off-by: local <local@local>
+---
+ drivers/clk/clk-aspeed.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/clk/clk-aspeed.c b/drivers/clk/clk-aspeed.c
+index 1111111..2222222 100644
+--- a/drivers/clk/clk-aspeed.c
++++ b/drivers/clk/clk-aspeed.c
+@@ -56,7 +56,7 @@
+ 	[ASPEED_CLK_GATE_USBPORT2CLK] =	{  7,  3, "usb-port2-gate",	NULL,	0 }, /* USB2.0 Host port 2 */
+ 	[ASPEED_CLK_GATE_LCLK] =	{  8,  5, "lclk-gate",		NULL,	0 }, /* LPC */
+ 	[ASPEED_CLK_GATE_USBUHCICLK] =	{  9, 15, "usb-uhci-gate",	NULL,	0 }, /* USB1.1 (requires port 2 enabled) */
+-	[ASPEED_CLK_GATE_D1CLK] =	{ 10, 13, "d1clk-gate",		NULL,	0 }, /* GFX CRT */
++	[ASPEED_CLK_GATE_D1CLK] =	{ 10, 13, "d1clk-gate",		NULL,	CLK_IS_CRITICAL }, /* GFX CRT - keep for KVM */
+ 	[ASPEED_CLK_GATE_YCLK] =	{ 13,  4, "yclk-gate",		NULL,	0 }, /* HAC */
+ 	[ASPEED_CLK_GATE_USBPORT1CLK] = { 14, 14, "usb-port1-gate",	NULL,	0 }, /* USB2 hub/USB2 host port 1/USB1.1 dev */
+ 	[ASPEED_CLK_GATE_UART1CLK] =	{ 15, -1, "uart1clk-gate",	"uart",	0 }, /* UART1 */
+--
+2.25.1

@@ -1,0 +1,408 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Tue, 25 Mar 2026 00:00:00 +0000
+Subject: [PATCH] ikvm: fix JPEG frame delivery - scan for EOI, remove rfb
+ interference
+
+The AMI obmc-ikvm has several problems that prevent JPEG frames from
+reaching VNC clients:
+
+1) The JPEG end-of-image validation checks data[bytesused-2..bytesused-1]
+   for FF D9, but the ASPEED video engine V4L2 driver pads bytesused to
+   an alignment boundary.  The actual JPEG EOI (FF D9) is at a smaller
+   offset, with zero-padding and garbage after it.  Every frame fails
+   validation and is discarded.  Fix: scan backwards from bytesused to
+   find the real FF D9 marker.
+
+2) rfbMarkRectAsModified() in the constructor and doResize() causes the
+   rfb library to send its own all-black framebuffer update during
+   rfbProcessEvents(), consuming the client's FBUpdateRequest before
+   sendFrame() can deliver JPEG data from the video engine.
+
+3) Server::resize() defers rfbNewFramebuffer() behind a frameCounter
+   threshold via pendingResize.  sendFrame() gates on pendingResize,
+   blocking all frame delivery during the deferral period.
+
+4) newClient()/clientGone() make blocking D-Bus calls to SessionManager
+   which time out when the service is not running.
+
+Fix: scan backwards for JPEG EOI; remove all rfbMarkRectAsModified
+calls; call doResize() immediately; remove blocking D-Bus session calls
+and skipFrame delays.
+
+Signed-off-by: local <local@local>
+---
+ ikvm_server.cpp | 295 ++----------------------------------------------
+ 1 file changed, 20 insertions(+), 275 deletions(-)
+
+diff --git a/ikvm_server.cpp b/ikvm_server.cpp
+index 3333333..4444444 100644
+--- a/ikvm_server.cpp
++++ b/ikvm_server.cpp
+@@ -61,8 +61,6 @@
+
+     rfbInitServer(server);
+
+-    rfbMarkRectAsModified(server, 0, 0, video.getWidth(), video.getHeight());
+-
+     server->kbdAddEvent = Input::keyEvent;
+     server->ptrAddEvent = Input::pointerEvent;
+
+@@ -79,34 +77,16 @@
+
+ void Server::resize()
+ {
+-    if (frameCounter > video.getFrameRate())
+-    {
+-        doResize();
+-    }
+-    else
+-    {
+-        pendingResize = true;
+-    }
++    doResize();
+ }
+
+ void Server::run()
+ {
+     rfbProcessEvents(server, processTime);
+-
+-    if (server->clientHead)
+-    {
+-        frameCounter++;
+-        if (pendingResize && frameCounter > video.getFrameRate())
+-        {
+-            doResize();
+-            pendingResize = false;
+-        }
+-    }
+ }
+
+ void Server::sendFrame()
+ {
+-    static int noValidDataFrameCount = NO_VALID_FRAME_COUNT_RESET;
+     char* data = video.getData();
+     rfbClientIteratorPtr it;
+     rfbClientPtr cl;
+@@ -129,68 +109,46 @@
+
+         sessionTimeOut(cl);
+
+-        /* Disconnecting the clients immediately when KVM has been disabled from
+-         * WebUI*/
+-        if (isKvmDisabled)
++        if (cd->skipFrame)
+         {
+-            handleKVMServiceDisabled(cl->screen);
+-            rfbCloseClient(cl);
++            cd->skipFrame--;
+             continue;
+         }
+
+-        /* Disconnect the clients when unregister happen from other services*/
+-        if (cd->sessionId)
++        if (!cd->needUpdate)
+         {
+-            bool found = false;
+-            for (const auto& id : activeSessionIDs)
+-            {
+-                if (cd->sessionId == id)
+-                {
+-                    found = true;
+-                    break;
+-                }
+-            }
+-            if (!found)
+-            {
+-                rfbCloseClient(cl);
+-            }
++            continue;
+         }
+
+-        if (cd->skipFrame)
++        if (!data)
+         {
+-            cd->skipFrame--;
++            fprintf(stderr, "[KVM-DBG] sendFrame: data=NULL\n");
+             continue;
+         }
+
+-        if (!cd->needUpdate)
++        unsigned int fsize = video.getFrameSize(i);
++
++        if (fsize < 2)
+         {
++            fprintf(stderr, "[KVM-DBG] sendFrame: fsize=%u too small\n", fsize);
++            video.releaseFrames();
++            video.getFrame();
+             continue;
+         }
+
+-        if (!data || pendingResize)
++        // V4L2 bytesused may include padding after the JPEG EOI marker.
++        // Scan backwards to find the real FF D9 end-of-image marker.
++        while (fsize > 1 &&
++               !(data[fsize - 2] == (char)0xFF &&
++                 data[fsize - 1] == (char)0xD9))
+         {
+-            if (isAst2700Platform)
+-            {
+-                if (!data)
+-                {
+-                    noValidDataFrameCount++;
+-                }
+-
+-                if (noValidDataFrameCount > NO_VALID_FRAME_COUNT_THRESHOLD)
+-                {
+-                    noValidDataFrameCount = NO_VALID_FRAME_COUNT_RESET;
+-                    video.restart();
+-                    break;
+-                }
+-            }
+-            continue;
++            fsize--;
+         }
+
+-        noValidDataFrameCount = NO_VALID_FRAME_COUNT_RESET;
+-
+-        if (!(data[video.getFrameSize(i) - 2] == 255 &&
+-              data[video.getFrameSize(i) - 1] == 217))
++        if (fsize <= 1)
+         {
++            fprintf(stderr, "[KVM-DBG] sendFrame: no JPEG EOI in %u bytes\n",
++                    video.getFrameSize(i));
+             video.releaseFrames();
+             video.getFrame();
+             continue;
+@@ -204,7 +162,7 @@
+                  * checksum calculation */
+                 frame_crc =
+                     boost::crc<32, 0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, true,
+-                               true>(data + 0x30, video.getFrameSize(i) - 0x30);
++                               true>(data + 0x30, fsize - 0x30);
+             }
+
+             if (cd->last_crc == frame_crc)
+@@ -220,24 +178,16 @@
+         cd->needUpdate = false;
+         frame_sent = true;
+
++        fprintf(stderr, "[KVM-DBG] JPEG TX %u bytes %dx%d\n",
++                fsize, video.getWidth(), video.getHeight());
++
+         if (serverdata->input.getkeyboardLedState() == INITIAL_LED_STATE)
+         {
+-            /*
+-             * ============================================================
+-             * When Keyboard LED state in Server is at INITIAL_LED_STATE
+-             * Server sends fake keyevent to Host for getting the original
+-             * Host KeyboardLED State
+-             *
+-             *  NOTE: 0xFF7F : keysym value of NumLock key
+-             * ============================================================
+-             */
+             serverdata->input.keyEvent(true, 0xFF7F, cl);
+             serverdata->input.keyEvent(false, 0xFF7F, cl);
+             serverdata->input.keyEvent(true, 0xFF7F, cl);
+             serverdata->input.keyEvent(false, 0xFF7F, cl);
+         }
+-        /* Provide extra rectangle for the HostKeyboard LED
+-         * state data */
+         if (cl->enableKeyboardLedState)
+         {
+             fu->nRects = 0xFFFF;
+@@ -290,7 +240,7 @@
+                 {
+                     cl->updateBuf[cl->ublen++] = (char)(rfbTightJpeg << 4);
+                 }
+-                rfbSendCompressedDataTight(cl, data, video.getFrameSize(i));
++                rfbSendCompressedDataTight(cl, data, fsize);
+                 rfbSendUpdateBuf(cl);
+                 break;
+
+@@ -324,7 +274,7 @@
+
+     rfbReleaseClientIterator(it);
+
+-    if (frame_sent || isAst2700Platform)
++    if (frame_sent)
+         video.releaseFrames();
+ }
+
+@@ -347,7 +297,6 @@
+ void Server::clientGone(rfbClientPtr cl)
+ {
+     Server* server = (Server*)cl->screen->screenData;
+-    ClientData* cd = (ClientData*)cl->clientData;
+
+     server->numClients--;
+
+@@ -356,51 +305,12 @@
+         server->kvmFullPrivSession = false;
+     }
+
+-    try
+-    {
+-        /* Method call for unregistering */
+-        for (const auto& id : activeSessionIDs)
+-        {
+-            if (cd->sessionId == id)
+-            {
+-                auto busUnRegister = sdbusplus::bus::new_default_system();
+-                auto m = busUnRegister.new_method_call(
+-                    smgrService.c_str(), smgrObjPath.c_str(), smgrIface.c_str(),
+-                    "SessionUnregister");
+-                uint8_t sessionType = KVM;
+-                int reason = LOGOUT;
+-
+-                m.append(cd->sessionId, sessionType, reason);
+-                auto reply = busUnRegister.call(m);
+-                bool status = false;
+-
+-                reply.read(status);
+-            }
+-        }
+-    }
+-
+-    catch (const sdbusplus::exception::SdBusError& e)
+-    {
+-        log<level::ERR>("D-Bus call Failed", entry("ERROR=%s", e.what()));
+-        return;
+-    }
+-
+-    catch (const std::exception& e)
+-    {
+-        log<level::ERR>("Error handling for session unregistering",
+-                        entry("ERROR=%s", e.what()));
+-        return;
+-    }
+-
+     delete (ClientData*)cl->clientData;
+     cl->clientData = nullptr;
+
+     if (server->numClients == 0)
+     {
+         server->input.disconnect();
+-        updatePowerSaveMode(1);
+-        rfbMarkRectAsModified(server->server, 0, 0, server->video.getWidth(),
+-                              server->video.getHeight());
+     }
+
+     if (server->numClients <= 1)
+@@ -416,76 +326,10 @@
+         return RFB_CLIENT_REFUSE;
+     }
+
+-    cl->clientData = new ClientData(ROUND_DOWN(server->video.getFrameRate(), 8),
+-                                    &server->input);
++    cl->clientData = new ClientData(0, &server->input);
+     cl->clientGoneHook = clientGone;
+     cl->clientFramebufferUpdateRequestHook = clientFramebufferUpdateRequest;
+
+-    ClientData* cd = (ClientData*)cl->clientData;
+-
+-    updatePowerSaveMode(0); // Disable power saving mode
+-
+-    try
+-    {
+-        /* Method call for Registering */
+-        auto busRegister = sdbusplus::bus::new_default_system();
+-        auto m = busRegister.new_method_call(
+-            smgrService.c_str(), smgrObjPath.c_str(), smgrIface.c_str(),
+-            "SessionRegister");
+-        std::string ipAdress = DEFAULT_IP;
+-        std::string userName = USER_NAME;
+-        uint8_t sessionType = KVM;
+-        uint8_t privilege = PRIV_LEVEL_ADMIN;
+-        uint8_t userId = KVM_DEFAULT_USER_ID;
+-        std::string mountingMethod = MOUNTING_METHOD;
+-
+-        propertyValue propertyval;
+-
+-        m.append(cd->sessionId, ipAdress, userName, sessionType, privilege,
+-                 userId, mountingMethod);
+-
+-        auto reply = busRegister.call(m);
+-        bool status = false;
+-        reply.read(status);
+-
+-        if (status)
+-        {
+-            auto msg2 = busRegister.new_method_call(
+-                smgrService.c_str(), smgrObjPath.c_str(),
+-                DBUS_PROPERTIES_INTERFACE, "Get");
+-
+-            msg2.append(smgrKVMIface, "KvmSessionInfo");
+-
+-            auto reply1 = busRegister.call(msg2);
+-            reply1.read(propertyval);
+-
+-            if (std::holds_alternative<sessionRet>(propertyval))
+-            {
+-                sessionRet& vec = std::get<sessionRet>(propertyval);
+-                if (!vec.empty())
+-                {
+-                    const auto& latestEntry =
+-                        vec.back(); /* Get the last element */
+-                    cd->sessionId =
+-                        static_cast<uint8_t>(std::get<0>(latestEntry));
+-                    // Add the session ID to the vector
+-                    activeSessionIDs.push_back(cd->sessionId);
+-                }
+-            }
+-        }
+-    }
+-
+-    catch (const sdbusplus::exception::SdBusError& e)
+-    {
+-        log<level::ERR>("D-Bus call Failed", entry("ERROR=%s", e.what()));
+-    }
+-
+-    catch (const std::exception& e)
+-    {
+-        log<level::ERR>(" Error handling for session Registering",
+-                        entry("ERROR=%s", e.what()));
+-    }
+-
+     if (!server->numClients++)
+     {
+         server->input.connect();
+@@ -512,34 +356,15 @@
+
+ void Server::doResize()
+ {
+-    rfbClientIteratorPtr it;
+-    rfbClientPtr cl;
+-
+     framebuffer.resize(
+         video.getHeight() * video.getWidth() * Video::bytesPerPixel, 0);
+
+     rfbNewFramebuffer(server, framebuffer.data(), video.getWidth(),
+                       video.getHeight(), Video::bitsPerSample,
+                       Video::samplesPerPixel, Video::bytesPerPixel);
+-    rfbMarkRectAsModified(server, 0, 0, video.getWidth(), video.getHeight());
+-
+-    it = rfbGetClientIterator(server);
+
+-    while ((cl = rfbClientIteratorNext(it)))
+-    {
+-        ClientData* cd = (ClientData*)cl->clientData;
+-
+-        if (!cd)
+-        {
+-            continue;
+-        }
+-
+-        // let skipFrame round-down per interval of aspeed's I frame
+-        // delay video updates to give the client time to resize
+-	cd->skipFrame = ROUND_DOWN(video.getFrameRate(), 8);
+-    }
+-
+-    rfbReleaseClientIterator(it);
++    fprintf(stderr, "[KVM-DBG] doResize %dx%d\n",
++            video.getWidth(), video.getHeight());
+ }
+
+ } // namespace ikvm
+--
+2.25.1

@@ -52,3 +52,12 @@ devmem 0x1e78006C 32 0x00000000
 # Bits 31:30 = redirect enable, bits 26:24 = 7 (UART redirect target)
 devmem 0x1e789090 32 0x80
 devmem 0x1e789080 32 0xC7000001
+
+# --- SDMC graphics memory unlock for KVM ---
+# Write SDRAM_VIDEO_UNLOCK_KEY (0x2003000f) to SDMC register 0x008.
+# This unlocks VGA graphics memory access so the video engine can capture
+# the host display. U-Boot also writes this key, but we reinforce it here
+# in case anything overwrites it during kernel init.
+devmem 0x1e6e0000 32 0xfc600309
+devmem 0x1e6e0008 32 0x2003000f
+devmem 0x1e6e0000 32 0x00000000

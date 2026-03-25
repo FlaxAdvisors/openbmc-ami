@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Mon, 24 Mar 2026 00:00:00 +0000
+Subject: [PATCH] ikvm: always use V4L2 getFrame, remove signal-gated
+ dimension and frame logic
+
+The AMI obmc-ikvm has three problems that prevent KVM from working on
+platforms like TiogaPass:
+
+1) statusUpdateThread gates getFrame() behind getSignalStatus().  When
+   the aspeed-video kernel driver transiently reports NO_SIGNAL (e.g.
+   during resolution changes), frames are never dequeued and the static
+   fallback images (power-off/no-signal JPEGs) do not exist on disk.
+
+2) Video::start() checks getSignalStatus() and forces 800x600 when
+   NO_SIGNAL is reported.  The aspeed-video driver initialises
+   v4l2_input_status to NO_SIGNAL before resolution detection completes,
+   so a race between open() and the ENUMINPUT ioctl can lock the VNC
+   desktop at the wrong size.
+
+3) Video::start() unconditionally resets width/height to 800x600
+   whenever the detected resolution differs from the default, overriding
+   the correct dimensions that came from VIDIOC_G_FMT.
+
+Fix: always call getFrame() in the manager loop; always trust the V4L2
+format dimensions from the driver in start(); remove the forced 800x600
+reset.  The needsResize()/resize() path handles resolution changes and
+the select() timeout in getFrame() naturally handles no-signal periods.
+
+Signed-off-by: local <local@local>
+---
+ ikvm_manager.cpp | 16 ++--------------
+ ikvm_video.cpp   | 27 ++++-----------------------
+ 2 files changed, 5 insertions(+), 38 deletions(-)
+
+diff --git a/ikvm_manager.cpp b/ikvm_manager.cpp
+index 1111111..2222222 100644
+--- a/ikvm_manager.cpp
++++ b/ikvm_manager.cpp
+@@ -75,21 +75,7 @@
+                 }
+             }
+
+-            if (manager->video.getSignalStatus() == V4L2_IN_ST_NO_SIGNAL)
+-            {
+-                if (hostPowerState == "Off")
+-                {
+-                    manager->video.setFrame(POWER_OFF_IMG_PATH);
+-                }
+-                else
+-                {
+-                    manager->video.setFrame(NO_SIGNAL_IMG_PATH);
+-                }
+-            }
+-            else
+-            {
+-                manager->video.getFrame();
+-            }
++            manager->video.getFrame();
+
+             if (scrnshotFlag.load())
+             {
+diff --git a/ikvm_video.cpp b/ikvm_video.cpp
+index 3333333..4444444 100644
+--- a/ikvm_video.cpp
++++ b/ikvm_video.cpp
+@@ -635,33 +635,10 @@
+                             entry("ERROR=%s", strerror(errno)));
+     }
+
+-    // Updating the width and height according to the power-off or no-signal JPG
+-    // image
+-    if (getSignalStatus() == V4L2_IN_ST_NO_SIGNAL)
+-    {
+-        height = DEFAULT_HEIGHT;
+-        width = DEFAULT_WIDTH;
+-    }
+-    else
+-    {
+-        height = fmt.fmt.pix.height;
+-        width = fmt.fmt.pix.width;
+-    }
++    height = fmt.fmt.pix.height;
++    width = fmt.fmt.pix.width;
+     pixelformat = fmt.fmt.pix.pixelformat;
+
+-    if (pixelformat != V4L2_PIX_FMT_RGB24 && pixelformat != V4L2_PIX_FMT_JPEG)
+-    {
+-        log<level::ERR>("Pixel Format not supported",
+-                        entry("PIXELFORMAT=%d", pixelformat));
+-    }
+-
+-    // Reset the width and height to their default values when the KVM connects
+-    if (width != DEFAULT_WIDTH && height != DEFAULT_HEIGHT)
+-    {
+-        height = DEFAULT_HEIGHT;
+-        width = DEFAULT_WIDTH;
+-    }
+-
+     resize();
+
+     if (oldHeight != height || oldWidth != width)
+--
+2.25.1

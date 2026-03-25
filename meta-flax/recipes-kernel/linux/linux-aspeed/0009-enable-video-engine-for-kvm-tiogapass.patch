@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Wed, 19 Mar 2026 00:00:00 +0000
+Subject: [PATCH] ARM: dts: aspeed: tiogapass: enable video engine for KVM
+
+Enable the ASPEED Video Engine for KVM remote console.
+Reserve 16MB at top of SDRAM for VGA framebuffer (no-map) plus
+32MB shared DMA pool for the video engine capture/compression buffers.
+
+Signed-off-by: local <local@local>
+---
+ .../aspeed/aspeed-bmc-facebook-tiogapass.dts  | 22 +++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+index 1111111..2222222 100644
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -44,6 +44,24 @@
+ 		reg = <0x80000000 0x20000000>;
+ 	};
+ 
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		vga_memory: framebuffer@9f000000 {
++			no-map;
++			reg = <0x9f000000 0x01000000>;
++		};
++
++		video_engine_memory: jpegbuffer {
++			size = <0x02000000>;
++			alignment = <0x01000000>;
++			compatible = "shared-dma-pool";
++			reusable;
++		};
++	};
++
+ 	iio-hwmon {
+ 		compatible = "iio-hwmon";
+ 		io-channels = <&adc 0>, <&adc 1>, <&adc 2>, <&adc 3>,
+@@ -569,3 +587,8 @@
+ 		aspeed,fan-tach-ch = /bits/ 8 <0x02>;
+ 	};
+ };
++
++&video {
++	status = "okay";
++	memory-region = <&video_engine_memory>;
++};
+--
+2.25.1

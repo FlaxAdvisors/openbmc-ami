@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Mon, 24 Mar 2026 00:00:00 +0000
+Subject: [PATCH] media: aspeed-video: force sync mode capture for TiogaPass
+
+On TiogaPass (AST2500), direct fetch mode reads from the VGA
+framebuffer in SDRAM but captures only black frames.  Sync mode
+(which captures from the CRT pixel stream) works correctly.
+
+Raise DIRECT_FETCH_THRESHOLD so that resolutions up to 1920x1200
+use sync mode instead of direct fetch.
+
+Signed-off-by: local <local@local>
+---
+ drivers/media/platform/aspeed/aspeed-video.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/aspeed/aspeed-video.c b/drivers/media/platform/aspeed/aspeed-video.c
+index 1111111..2222222 100644
+--- a/drivers/media/platform/aspeed/aspeed-video.c
++++ b/drivers/media/platform/aspeed/aspeed-video.c
+@@ -55,7 +55,7 @@
+ #define RESOLUTION_CHANGE_DELAY		msecs_to_jiffies(500)
+ #define MODE_DETECT_TIMEOUT		msecs_to_jiffies(500)
+ #define STOP_TIMEOUT			msecs_to_jiffies(1000)
+-#define DIRECT_FETCH_THRESHOLD		0x0c0000 /* 1024 * 768 */
++#define DIRECT_FETCH_THRESHOLD		0x8ca000 /* force sync mode up to 1920*1200 */
+
+ #define VE_MAX_SRC_BUFFER_SIZE		0x8ca000 /* 1920 * 1200, 32bpp */
+ #define VE_JPEG_HEADER_SIZE		0x006000 /* 512 * 12 * 4 */
+--
+2.25.1
