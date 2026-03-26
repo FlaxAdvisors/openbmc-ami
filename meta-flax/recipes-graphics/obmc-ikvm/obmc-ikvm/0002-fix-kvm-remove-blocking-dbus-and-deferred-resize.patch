@@ -33,7 +33,7 @@ and skipFrame delays.
 Signed-off-by: local <local@local>
 ---
  ikvm_server.cpp | 295 ++----------------------------------------------
- 1 file changed, 20 insertions(+), 275 deletions(-)
+ 1 file changed, 15 insertions(+), 275 deletions(-)
 
 diff --git a/ikvm_server.cpp b/ikvm_server.cpp
 index 3333333..4444444 100644
@@ -84,7 +84,7 @@ index 3333333..4444444 100644
      char* data = video.getData();
      rfbClientIteratorPtr it;
      rfbClientPtr cl;
-@@ -129,68 +109,46 @@
+@@ -129,68 +109,44 @@
 
          sessionTimeOut(cl);
 
@@ -123,7 +123,6 @@ index 3333333..4444444 100644
 +        if (!data)
          {
 -            cd->skipFrame--;
-+            fprintf(stderr, "[KVM-DBG] sendFrame: data=NULL\n");
              continue;
          }
 
@@ -132,7 +131,6 @@ index 3333333..4444444 100644
 +
 +        if (fsize < 2)
          {
-+            fprintf(stderr, "[KVM-DBG] sendFrame: fsize=%u too small\n", fsize);
 +            video.releaseFrames();
 +            video.getFrame();
              continue;
@@ -183,13 +181,10 @@ index 3333333..4444444 100644
              }
 
              if (cd->last_crc == frame_crc)
-@@ -220,24 +178,16 @@
+@@ -220,24 +178,13 @@
          cd->needUpdate = false;
          frame_sent = true;
 
-+        fprintf(stderr, "[KVM-DBG] JPEG TX %u bytes %dx%d\n",
-+                fsize, video.getWidth(), video.getHeight());
-+
          if (serverdata->input.getkeyboardLedState() == INITIAL_LED_STATE)
          {
 -            /*
@@ -367,7 +362,7 @@ index 3333333..4444444 100644
      if (!server->numClients++)
      {
          server->input.connect();
-@@ -512,34 +356,15 @@
+@@ -512,34 +356,13 @@
 
  void Server::doResize()
  {
@@ -399,8 +394,6 @@ index 3333333..4444444 100644
 -    }
 -
 -    rfbReleaseClientIterator(it);
-+    fprintf(stderr, "[KVM-DBG] doResize %dx%d\n",
-+            video.getWidth(), video.getHeight());
  }
 
  } // namespace ikvm
