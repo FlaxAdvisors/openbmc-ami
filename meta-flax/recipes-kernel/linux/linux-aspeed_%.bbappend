@@ -12,6 +12,7 @@ SRC_URI += " \
      file://0009-enable-video-engine-for-kvm-tiogapass.patch \
      file://0010-aspeed-video-force-sync-mode-for-kvm-capture.patch \
      file://0011-clk-aspeed-keep-d1clk-crt-running-for-kvm.patch \
+     file://0012-enable-usb-vhub-for-kvm-hid-tiogapass.patch \
      file://tiogapass.cfg \
      file://openbmc-flash-layout-64-tioga.dtsi \
 "

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Wed, 26 Mar 2026 00:00:00 +0000
+Subject: [PATCH] ARM: dts: aspeed: tiogapass: enable USB virtual hub for KVM
+ HID
+
+Enable the AST2500 USB virtual hub (vhub) so that the BMC can present
+USB HID keyboard and mouse gadgets to the host.  This is required for
+obmc-ikvm keyboard and mouse input via the KVM remote console.
+
+Signed-off-by: local <local@local>
+---
+ .../aspeed/aspeed-bmc-facebook-tiogapass.dts  | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -592,3 +592,7 @@
+ 	status = "okay";
+ 	memory-region = <&video_engine_memory>;
+ };
++
++&vhub {
++	status = "okay";
++};
+--
+2.25.1
