@@ -1,0 +1,596 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: TiogaPass BMC <bmc@tiogapass>
+Date: Mon, 30 Mar 2026 00:00:00 +0000
+Subject: [PATCH] Add SMBIOS NVMe drive (OEM type 0xC2) and NIC (type 10)
+ inventory to D-Bus
+
+Parse OEM SMBIOS type 0xC2 (Intel NVMe namespace) records and publish each
+drive as xyz.openbmc_project.Inventory.Item.Drive + Decorator.Asset on D-Bus.
+
+Parse SMBIOS type 10 (Onboard Devices) records and expose each Ethernet device
+(type nibble == 5) as xyz.openbmc_project.Inventory.Item.FabricAdapter +
+Decorator.Asset on D-Bus.
+
+D-Bus paths:
+  /xyz/openbmc_project/inventory/system/drive/<N>
+  /xyz/openbmc_project/inventory/system/nic/<N>
+---
+diff --git a/include/drive.hpp b/include/drive.hpp
+new file mode 100644
+index 0000000..c50cfed
+--- /dev/null
++++ b/include/drive.hpp
+@@ -0,0 +1,67 @@
++#pragma once
++#include "smbios_mdrv2.hpp"
++
++#include <xyz/openbmc_project/Association/Definitions/server.hpp>
++#include <xyz/openbmc_project/Inventory/Decorator/Asset/server.hpp>
++#include <xyz/openbmc_project/Inventory/Item/Drive/server.hpp>
++#include <xyz/openbmc_project/Inventory/Item/server.hpp>
++
++#include <cstdint>
++#include <string>
++
++namespace phosphor
++{
++
++namespace smbios
++{
++
++using DriveIface =
++    sdbusplus::server::xyz::openbmc_project::inventory::item::Drive;
++using DriveType =
++    sdbusplus::server::xyz::openbmc_project::inventory::item::Drive::DriveType;
++using DriveProtocol = sdbusplus::server::xyz::openbmc_project::inventory::
++    item::Drive::DriveProtocol;
++using driveAsset =
++    sdbusplus::server::xyz::openbmc_project::inventory::decorator::Asset;
++using driveItem =
++    sdbusplus::server::xyz::openbmc_project::inventory::Item;
++using driveAssociation =
++    sdbusplus::server::xyz::openbmc_project::association::Definitions;
++
++class Drive :
++    sdbusplus::server::object_t<DriveIface, driveAsset, driveItem,
++                                driveAssociation>
++{
++  public:
++    Drive() = delete;
++    Drive(const Drive&) = delete;
++    Drive& operator=(const Drive&) = delete;
++    Drive(Drive&&) = delete;
++    Drive& operator=(Drive&&) = delete;
++    ~Drive() = default;
++
++    Drive(sdbusplus::bus_t& bus, const std::string& objPath,
++          const uint8_t& driveId, uint8_t* smbiosTableStorage,
++          const std::string& motherboard) :
++        sdbusplus::server::object_t<DriveIface, driveAsset, driveItem,
++                                    driveAssociation>(bus, objPath.c_str()),
++        driveNum(driveId)
++    {
++        driveInfoUpdate(smbiosTableStorage, motherboard);
++    }
++
++    void driveInfoUpdate(uint8_t* smbiosTableStorage,
++                         const std::string& motherboard);
++
++  private:
++    uint8_t driveNum;
++    uint8_t* storage;
++    std::string motherboardPath;
++};
++
++/* OEM type for Intel NVMe namespace records */
++static constexpr uint8_t nvmeSmbiosType = 0xC2;
++
++}; // namespace smbios
++
++}; // namespace phosphor
+diff --git a/include/mdrv2.hpp b/include/mdrv2.hpp
+index 65890ed..f2acb79 100644
+--- a/include/mdrv2.hpp
++++ b/include/mdrv2.hpp
+@@ -17,6 +17,8 @@
+ #pragma once
+ #include "cpu.hpp"
+ #include "dimm.hpp"
++#include "drive.hpp"
++#include "nic.hpp"
+ #include "pcieslot.hpp"
+ #include "smbios_mdrv2.hpp"
+ #include "system.hpp"
+@@ -146,9 +148,13 @@ class MDRV2 :
+     std::optional<size_t> getTotalCpuSlot(void);
+     std::optional<size_t> getTotalDimmSlot(void);
+     std::optional<size_t> getTotalPcieSlot(void);
++    std::optional<size_t> getTotalDriveSlot(void);
++    std::optional<size_t> getTotalNicSlot(void);
+     std::vector<std::unique_ptr<Cpu>> cpus;
+     std::vector<std::unique_ptr<Dimm>> dimms;
+     std::vector<std::unique_ptr<Pcie>> pcies;
++    std::vector<std::unique_ptr<Drive>> drives;
++    std::vector<std::unique_ptr<Nic>> nics;
+     std::unique_ptr<System> system;
+     std::shared_ptr<sdbusplus::asio::dbus_interface> smbiosInterface;
+ };
+diff --git a/include/nic.hpp b/include/nic.hpp
+new file mode 100644
+index 0000000..a2f5a89
+--- /dev/null
++++ b/include/nic.hpp
+@@ -0,0 +1,60 @@
++#pragma once
++#include "smbios_mdrv2.hpp"
++
++#include <xyz/openbmc_project/Association/Definitions/server.hpp>
++#include <xyz/openbmc_project/Inventory/Decorator/Asset/server.hpp>
++#include <xyz/openbmc_project/Inventory/Item/FabricAdapter/server.hpp>
++#include <xyz/openbmc_project/Inventory/Item/server.hpp>
++
++#include <cstdint>
++#include <string>
++
++namespace phosphor
++{
++
++namespace smbios
++{
++
++using FabricAdapterIface =
++    sdbusplus::server::xyz::openbmc_project::inventory::item::FabricAdapter;
++using nicAsset =
++    sdbusplus::server::xyz::openbmc_project::inventory::decorator::Asset;
++using nicItem =
++    sdbusplus::server::xyz::openbmc_project::inventory::Item;
++using nicAssociation =
++    sdbusplus::server::xyz::openbmc_project::association::Definitions;
++
++class Nic :
++    sdbusplus::server::object_t<FabricAdapterIface, nicAsset, nicItem,
++                                nicAssociation>
++{
++  public:
++    Nic() = delete;
++    Nic(const Nic&) = delete;
++    Nic& operator=(const Nic&) = delete;
++    Nic(Nic&&) = delete;
++    Nic& operator=(Nic&&) = delete;
++    ~Nic() = default;
++
++    Nic(sdbusplus::bus_t& bus, const std::string& objPath,
++        const uint8_t& nicId, uint8_t* smbiosTableStorage,
++        const std::string& motherboard) :
++        sdbusplus::server::object_t<FabricAdapterIface, nicAsset, nicItem,
++                                    nicAssociation>(bus, objPath.c_str()),
++        nicNum(nicId)
++    {
++        nicInfoUpdate(smbiosTableStorage, motherboard);
++    }
++
++    void nicInfoUpdate(uint8_t* smbiosTableStorage,
++                       const std::string& motherboard);
++
++  private:
++    uint8_t nicNum;
++    uint8_t* storage;
++    std::string motherboardPath;
++};
++
++}; // namespace smbios
++
++}; // namespace phosphor
+diff --git a/src/drive.cpp b/src/drive.cpp
+new file mode 100644
+index 0000000..3988b58
+--- /dev/null
++++ b/src/drive.cpp
+@@ -0,0 +1,83 @@
++/*
++// Copyright (c) 2018 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++*/
++
++#include "drive.hpp"
++
++#include <phosphor-logging/log.hpp>
++
++namespace phosphor
++{
++namespace smbios
++{
++
++void Drive::driveInfoUpdate(uint8_t* smbiosTableStorage,
++                             const std::string& motherboard)
++{
++    storage = smbiosTableStorage;
++    motherboardPath = motherboard;
++
++    uint8_t* dataIn = getSMBIOSTypePtr(storage, nvmeSmbiosType);
++
++    if (dataIn == nullptr)
++    {
++        phosphor::logging::log<phosphor::logging::level::DEBUG>(
++            "No OEM NVMe SMBIOS records found");
++        return;
++    }
++
++    /* Walk to the driveNum-th occurrence of nvmeSmbiosType */
++    for (uint8_t index = 0; index < driveNum;)
++    {
++        dataIn = smbiosNextPtr(dataIn);
++        if (dataIn == nullptr)
++        {
++            return;
++        }
++        dataIn = getSMBIOSTypePtr(dataIn, nvmeSmbiosType);
++        if (dataIn == nullptr)
++        {
++            return;
++        }
++        index++;
++    }
++
++    uint8_t structLen = *(dataIn + 1);
++
++    /*
++     * OEM type 0xC2 string layout (1-indexed after fixed header):
++     *   [1] = namespace name  (e.g. "NVMe NameSpace 1")
++     *   [2] = device model    (e.g. "INTEL SSDPEKNW512G8")
++     *   [3] = serial number   (e.g. "BTNH90350E9W512A")
++     */
++    driveAsset::model(positionToString(2, structLen, dataIn));
++    driveAsset::serialNumber(positionToString(3, structLen, dataIn));
++    driveAsset::manufacturer("Intel");
++
++    DriveIface::type(DriveType::SSD);
++    DriveIface::protocol(DriveProtocol::NVMe);
++
++    driveItem::present(true);
++
++    if (!motherboardPath.empty())
++    {
++        std::vector<std::tuple<std::string, std::string, std::string>> assocs;
++        assocs.emplace_back("chassis", "drives", motherboardPath);
++        driveAssociation::associations(assocs);
++    }
++}
++
++} // namespace smbios
++} // namespace phosphor
+diff --git a/src/mdrv2.cpp b/src/mdrv2.cpp
+index aba2775..a0a3ed5 100644
+--- a/src/mdrv2.cpp
++++ b/src/mdrv2.cpp
+@@ -17,6 +17,8 @@
+ #include "mdrv2.hpp"
+ 
+ #include "pcieslot.hpp"
++#include "drive.hpp"
++#include "nic.hpp"
+ 
+ #include <sys/mman.h>
+ 
+@@ -31,6 +33,12 @@ namespace phosphor
+ namespace smbios
+ {
+ 
++static constexpr const char* drivePath =
++    "/xyz/openbmc_project/inventory/system/drive/";
++
++static constexpr const char* nicPath =
++    "/xyz/openbmc_project/inventory/system/nic/";
++
+ std::vector<uint8_t> MDRV2::getDirectoryInformation(uint8_t dirIndex)
+ {
+     std::vector<uint8_t> responseDir;
+@@ -540,6 +548,68 @@ void MDRV2::systemInfoUpdate()
+         }
+     }
+ 
++    num = getTotalDriveSlot();
++    if (!num)
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "No NVMe drives found in SMBIOS table");
++    }
++    else
++    {
++        /* In case the new size is smaller than old, trim the vector */
++        if (*num < drives.size())
++        {
++            drives.resize(*num);
++        }
++
++        for (unsigned int index = 0; index < *num; index++)
++        {
++            std::string path = drivePath + std::to_string(index);
++            if (index + 1 > drives.size())
++            {
++                drives.emplace_back(std::make_unique<phosphor::smbios::Drive>(
++                    bus, path, index,
++                    smbiosDir.dir[smbiosDirIndex].dataStorage, motherboardPath));
++            }
++            else
++            {
++                drives[index]->driveInfoUpdate(
++                    smbiosDir.dir[smbiosDirIndex].dataStorage, motherboardPath);
++            }
++        }
++    }
++
++    num = getTotalNicSlot();
++    if (!num)
++    {
++        phosphor::logging::log<phosphor::logging::level::INFO>(
++            "No onboard NICs found in SMBIOS table");
++    }
++    else
++    {
++        /* In case the new size is smaller than old, trim the vector */
++        if (*num < nics.size())
++        {
++            nics.resize(*num);
++        }
++
++        for (unsigned int index = 0; index < *num; index++)
++        {
++            std::string path = nicPath + std::to_string(index);
++            if (index + 1 > nics.size())
++            {
++                nics.emplace_back(std::make_unique<phosphor::smbios::Nic>(
++                    bus, path, index,
++                    smbiosDir.dir[smbiosDirIndex].dataStorage, motherboardPath));
++            }
++            else
++            {
++                nics[index]->nicInfoUpdate(
++                    smbiosDir.dir[smbiosDirIndex].dataStorage, motherboardPath);
++            }
++        }
++    }
++
+     system.reset();
+     system = std::make_unique<System>(
+         bus, systemPath, smbiosDir.dir[smbiosDirIndex].dataStorage);
+@@ -654,6 +724,82 @@ std::optional<size_t> MDRV2::getTotalPcieSlot()
+     return num;
+ }
+ 
++std::optional<size_t> MDRV2::getTotalDriveSlot()
++{
++    uint8_t* dataIn = smbiosDir.dir[smbiosDirIndex].dataStorage;
++    size_t num = 0;
++
++    if (dataIn == nullptr)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Fail to get total NVMe drive slot - no storage data");
++        return std::nullopt;
++    }
++
++    while (1)
++    {
++        dataIn = getSMBIOSTypePtr(dataIn, nvmeSmbiosType);
++        if (dataIn == nullptr)
++        {
++            break;
++        }
++        num++;
++        dataIn = smbiosNextPtr(dataIn);
++        if (dataIn == nullptr)
++        {
++            break;
++        }
++        if (num >= limitEntryLen)
++        {
++            break;
++        }
++    }
++
++    return num;
++}
++
++std::optional<size_t> MDRV2::getTotalNicSlot()
++{
++    uint8_t* dataIn = smbiosDir.dir[smbiosDirIndex].dataStorage;
++    size_t num = 0;
++
++    if (dataIn == nullptr)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "Fail to get total NIC slot - no storage data");
++        return std::nullopt;
++    }
++
++    dataIn = getSMBIOSTypePtr(dataIn, onBoardDevicesType);
++    if (dataIn == nullptr)
++    {
++        return num;
++    }
++
++    uint8_t structLen = *(dataIn + 1);
++    if (structLen < 4)
++    {
++        return num;
++    }
++
++    uint8_t numDevices = (structLen - 4) / 2;
++    for (uint8_t i = 0; i < numDevices; i++)
++    {
++        uint8_t* entry = dataIn + 4 + (i * 2);
++        uint8_t devType = (*entry) & 0x7F;
++        if (devType == 5) /* Ethernet */
++        {
++            num++;
++        }
++        if (num >= limitEntryLen)
++        {
++            break;
++        }
++    }
++
++    return num;
++}
++
+ bool MDRV2::checkSMBIOSVersion(uint8_t* dataIn)
+ {
+     const std::string anchorString21 = "_SM_";
+diff --git a/src/meson.build b/src/meson.build
+index 4a54d28..0f55dc3 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -13,6 +13,8 @@ executable(
+   'mdrv2_main.cpp',
+   'cpu.cpp',
+   'dimm.cpp',
++  'drive.cpp',
++  'nic.cpp',
+   'system.cpp',
+   'pcieslot.cpp',
+   cpp_args: cpp_args_smbios,
+diff --git a/src/nic.cpp b/src/nic.cpp
+new file mode 100644
+index 0000000..5fb43a6
+--- /dev/null
++++ b/src/nic.cpp
+@@ -0,0 +1,127 @@
++/*
++// Copyright (c) 2018 Intel Corporation
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//      http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++*/
++
++#include "nic.hpp"
++
++#include <phosphor-logging/log.hpp>
++
++#include <algorithm>
++#include <string>
++
++namespace phosphor
++{
++namespace smbios
++{
++
++/*
++ * SMBIOS type 10 (Onboard Devices) structure layout:
++ *
++ *   Offset  Size  Description
++ *     0      1    Type = 10
++ *     1      1    Length (covers header + device array)
++ *     2      2    Handle
++ *     4+     2*N  Device entries: [type_byte, string_index]
++ *                   type_byte bit7 = enabled, bits 0-6 = device type
++ *                   device type 5 = Ethernet
++ *
++ * Number of device entries = (Length - 4) / 2
++ */
++static constexpr uint8_t onboardDeviceEthernet = 5;
++
++void Nic::nicInfoUpdate(uint8_t* smbiosTableStorage,
++                         const std::string& motherboard)
++{
++    storage = smbiosTableStorage;
++    motherboardPath = motherboard;
++
++    uint8_t* dataIn = getSMBIOSTypePtr(storage, onBoardDevicesType);
++
++    if (dataIn == nullptr)
++    {
++        phosphor::logging::log<phosphor::logging::level::DEBUG>(
++            "No Onboard Devices SMBIOS record found");
++        return;
++    }
++
++    uint8_t structLen = *(dataIn + 1);
++    if (structLen < 4)
++    {
++        return;
++    }
++
++    /* Scan all device entries in this type-10 record for the nicNum-th
++     * Ethernet device */
++    uint8_t numDevices = (structLen - 4) / 2;
++    uint8_t ethernetCount = 0;
++    uint8_t stringIndex = 0;
++    bool found = false;
++
++    for (uint8_t i = 0; i < numDevices; i++)
++    {
++        uint8_t* entry = dataIn + 4 + (i * 2);
++        uint8_t typeByte = *entry;
++        uint8_t devType = typeByte & 0x7F;
++
++        if (devType == onboardDeviceEthernet)
++        {
++            if (ethernetCount == nicNum)
++            {
++                stringIndex = *(entry + 1);
++                found = true;
++                break;
++            }
++            ethernetCount++;
++        }
++    }
++
++    if (!found || stringIndex == 0)
++    {
++        return;
++    }
++
++    std::string rawName = positionToString(stringIndex, structLen, dataIn);
++
++    /* Strip leading whitespace */
++    size_t start = rawName.find_first_not_of(' ');
++    std::string name = (start == std::string::npos) ? rawName
++                                                    : rawName.substr(start);
++
++    /* Split at first space: first token = manufacturer, rest = model.
++     * If there is no space the whole string becomes the model. */
++    size_t sp = name.find(' ');
++    if (sp != std::string::npos)
++    {
++        nicAsset::manufacturer(name.substr(0, sp));
++        nicAsset::model(name.substr(sp + 1));
++    }
++    else
++    {
++        nicAsset::manufacturer("");
++        nicAsset::model(name);
++    }
++
++    nicItem::present(true);
++
++    if (!motherboardPath.empty())
++    {
++        std::vector<std::tuple<std::string, std::string, std::string>> assocs;
++        assocs.emplace_back("chassis", "nics", motherboardPath);
++        nicAssociation::associations(assocs);
++    }
++}
++
++} // namespace smbios
++} // namespace phosphor

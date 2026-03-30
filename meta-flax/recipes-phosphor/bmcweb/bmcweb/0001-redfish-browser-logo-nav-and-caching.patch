@@ -1,0 +1,97 @@
+From 1902341724a774d1236e989eba7705bda3dd6400 Mon Sep 17 00:00:00 2001
+From: harlan <hmccanne@exclamationpoint.com>
+Date: Sat, 28 Mar 2026 15:51:56 +0000
+Subject: [PATCH] Redfish browser: small logo top-left, back nav, fix asset
+ caching
+
+- Move DMTF logo into a header bar at 1/4 size (144px wide)
+- Add Up one level navigation link via javascript: href
+- Fix non-hashed static assets getting no-store cache: set max-age=3600
+  so the 74KB SVG is not re-fetched on every Redfish page navigation
+---
+ include/webassets.hpp        |  7 +++++++
+ src/json_html_serializer.cpp |  8 ++------
+ static/styles/redfish.css    | 27 ++++++++++++++++-----------
+ 3 files changed, 25 insertions(+), 17 deletions(-)
+
+diff --git a/include/webassets.hpp b/include/webassets.hpp
+index 3157116e..5e521998 100644
+--- a/include/webassets.hpp
++++ b/include/webassets.hpp
+@@ -101,6 +101,13 @@ inline void
+             return;
+         }
+     }
++    else
++    {
++        // Non-hashed static assets (e.g. redfish.css, logo SVG): cache for 1h
++        // so they aren't re-fetched on every Redfish browser page navigation.
++        asyncResp->res.addHeader(boost::beast::http::field::cache_control,
++                                 "max-age=3600");
++    }
+
+     if (asyncResp->res.openFile(file.absolutePath) != crow::OpenCode::Success)
+     {
+diff --git a/src/json_html_serializer.cpp b/src/json_html_serializer.cpp
+index 0990827d..916a87b8 100644
+--- a/src/json_html_serializer.cpp
++++ b/src/json_html_serializer.cpp
+@@ -561,14 +561,13 @@ void dumpHtml(std::string& out, const nlohmann::json& json)
+            "<link href=\"/styles/redfish.css\" rel=\"stylesheet\">\n"
+            "</head>\n"
+            "<body>\n"
+-           "<div class=\"container\">\n"
+-           "<img src=\"/images/DMTF_Redfish_logo_2017.svg\" alt=\"redfish\" "
+-           "height=\"406px\" "
+-           "width=\"576px\">\n"
++           "<div class=\"header\">\n"
++           "<img src=\"/images/DMTF_Redfish_logo_2017.svg\" alt=\"redfish\" class=\"logo\">\n"
++           "<a class=\"back-link\" href=\"javascript:window.location.pathname=window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/'))\">Up one level</a>\n"
++           "</div>\n"
+            "<div class=\"content\">\n";
+     dump(out, json);
+     out += "</div>\n"
+-           "</div>\n"
+            "</body>\n"
+            "</html>\n";
+ }
+diff --git a/static/styles/redfish.css b/static/styles/redfish.css
+index 4e851ebe..890d231d 100644
+--- a/static/styles/redfish.css
++++ b/static/styles/redfish.css
+@@ -1,17 +1,27 @@
+-img {
+-  max-width: 30em;
+-  margin: 0 auto;
++.header {
++  padding: 6px 10px;
++  background: #fff;
++  border-bottom: 1px solid #ddd;
++  display: flex;
++  align-items: center;
++  gap: 12px;
+ }
+
+-.container {
+-  width: 30em;
+-  top: 50%;
+-  left: 50%;
+-  margin: 0 auto;
++.logo {
++  width: 144px;
++  height: auto;
++}
++
++.back-link {
++  font-family: monospace;
++  font-size: 13px;
++  text-decoration: none;
++  color: #0645ad;
+ }
+
+ .content {
+   font-family: monospace;
++  padding: 8px;
+ }
+
+ .tab {

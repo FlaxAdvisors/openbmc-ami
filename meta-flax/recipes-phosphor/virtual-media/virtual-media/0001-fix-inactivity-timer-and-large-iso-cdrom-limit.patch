@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Wed, 26 Mar 2026 00:00:00 +0000
+Subject: [PATCH] virtual-media: fix inactivity timer, stats, and large ISO
+ cdrom limit
+
+Three fixes for virtual media on platforms without the AMI stats kernel
+patch:
+
+1) active_state.hpp: lastAccess is default-initialized to epoch (time
+   zero).  The inactivity timer checks (now - lastAccess) >= 1800s on
+   the very first 1-second tick.  Since now - epoch is always >>1800s,
+   every mount is immediately unmounted.  Fix: initialize lastAccess
+   to steady_clock::now() so the timer counts from mount time.
+
+2) system.hpp getStats(): The kernel f_mass_storage function has no
+   "stats" sysfs attribute (that is an AMI kernel addition).  getStats()
+   returns empty and logs an error every second, spamming the journal.
+   Fix: when the stats file doesn't exist, return a monotonic counter
+   so the inactivity timer sees continuous "activity" and never fires
+   due to missing stats.
+
+3) system.hpp configure(): detectImageType() correctly identifies
+   ISO9660 images via the "CD001" signature and sets cdrom=1.  However,
+   the kernel mass storage cdrom mode caps images at 256*60*75 sectors
+   (~562MB).  DVD/Blu-ray ISOs (>700MB) are silently truncated.  Fix:
+   force cdrom=0 for images larger than 700MB.
+
+Signed-off-by: local <local@local>
+---
+ src/state/active_state.hpp | 3 ++-
+ src/system.hpp             | 13 ++++++++-----
+ 2 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/src/state/active_state.hpp b/src/state/active_state.hpp
+--- a/src/state/active_state.hpp
++++ b/src/state/active_state.hpp
+@@ -105,6 +105,7 @@
+     std::unique_ptr<resource::Process> process;
+     std::unique_ptr<resource::Gadget> gadget;
+     std::function<void(const boost::system::error_code&)> handler;
+-    std::chrono::time_point<std::chrono::steady_clock> lastAccess;
++    std::chrono::time_point<std::chrono::steady_clock> lastAccess =
++        std::chrono::steady_clock::now();
+     std::string lastStats;
+ };
+diff --git a/src/system.hpp b/src/system.hpp
+--- a/src/system.hpp
++++ b/src/system.hpp
+@@ -1254,7 +1254,11 @@
+                     return -1;
+                 }
+
+-                echoToFile(funcMassStorageDir / "lun.0/cdrom", (imgType == 1) ? "1" : "0");
++                // The kernel USB mass storage cdrom mode caps images at
++                // 256*60*75 sectors (~562MB).  Force cdrom=0 for images
++                // larger than 700MB so the full image is exposed.
++                bool useCdrom = (imgType == 1) && (imageSize <= 700ULL * 1024 * 1024);
++                echoToFile(funcMassStorageDir / "lun.0/cdrom", useCdrom ? "1" : "0");
+                 echoToFile(funcMassStorageDir / "lun.0/file", path);
+                 /*usbVmediaName visible in host is posted to inquiry_string*/
+ 		snprintf(usbVmediaName, USB_VMEDIA_NAME_SIZE, "Virtual USB %s", name.c_str());
+@@ -1575,8 +1579,11 @@
+         std::ifstream ifs(statsPath);
+         if (!ifs.is_open())
+         {
+-            LogMsg(Logger::Error, name, "Failed to open ", statsPath);
+-            return {};
++            // The kernel stats attribute is not available on all
++            // platforms.  Return a monotonic counter so the inactivity
++            // timer sees continuous "activity" and never fires.
++            static uint64_t fakeCounter = 0;
++            return std::to_string(fakeCounter++);
+         }
+
+         return std::string{std::istreambuf_iterator<char>(ifs),
+--
+2.25.1

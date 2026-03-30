@@ -1,0 +1,40 @@
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -2706,10 +2706,9 @@
+     }
+     else if (configData.name == "PostComplete")
+     {
+-        OperatingSystemStateStage osState =
+-            (initialValue ? OperatingSystemStateStage::Inactive
+-                          : OperatingSystemStateStage::Standby);
+-        setOperatingSystemState(osState);
++        bool asserted = (initialValue == postCompleteConfig.polarity);
++        setOperatingSystemState(asserted ? OperatingSystemStateStage::Standby
++                                         : OperatingSystemStateStage::Inactive);
+     }
+     else
+     {
+@@ -3867,15 +3866,17 @@
+     OperatingSystemStateStage osState;
+     if (postCompleteConfig.type == ConfigType::GPIO)
+     {
+-        osState = postCompleteLine.get_value() > 0
+-                      ? OperatingSystemStateStage::Inactive
+-                      : OperatingSystemStateStage::Standby;
++        bool pcAsserted =
++            (postCompleteLine.get_value() > 0) == postCompleteConfig.polarity;
++        osState = pcAsserted ? OperatingSystemStateStage::Standby
++                             : OperatingSystemStateStage::Inactive;
+     }
+     else
+     {
+-        osState = getProperty(postCompleteConfig) > 0
+-                      ? OperatingSystemStateStage::Inactive
+-                      : OperatingSystemStateStage::Standby;
++        bool pcAsserted =
++            (getProperty(postCompleteConfig) > 0) == postCompleteConfig.polarity;
++        osState = pcAsserted ? OperatingSystemStateStage::Standby
++                             : OperatingSystemStateStage::Inactive;
+     }
+ 
+     osIface->register_property(
