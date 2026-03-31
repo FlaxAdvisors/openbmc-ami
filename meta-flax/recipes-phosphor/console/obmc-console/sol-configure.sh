@@ -14,12 +14,28 @@ route() {
 }
 
 setup_routing() {
-    echo "Enabling UART routing: uart1 <-> uart2, uart4 <-> io1"
-    route uart1 uart2
+    # ONE-WAY routing: host COM1 TX -> uart2 RX -> ttyS1 (obmc-console reads host output).
+    # Do NOT set uart1 source = uart2. The bidirectional route creates a return path from
+    # uart2 TX -> uart1 RX -> LPC UART1 host RX FIFO -> host COM1 RX. Something generates
+    # data on uart2 TX (invisible to strace, confirmed by reading ttyS0 consuming it), which
+    # BIOS interprets as keyboard input (ESC -> enters setup, H from ANSI sequences, etc.).
+    # uart1 source stays as io1 (default/teardown state) = quiet = no noise to BIOS.
+    # SOL keyboard input (BMC->host typing) is disabled by this; use KVM for BIOS interaction.
+    echo "Enabling UART routing: uart2 from uart1 (one-way), uart4 <-> io1"
+    echo -n "uart1" > "$ROUTER/uart2"
     route uart4 io1
 }
 
 setup() {
+    # Disable kernel tty echo on ttyS1 BEFORE activating the UART crossbar.
+    # route uart1 <-> uart2 makes uart2 TX feed into the LPC UART1 host RX FIFO.
+    # The kernel tty line discipline default has echo on, so any host serial data
+    # received on uart2 RX gets echoed back on uart2 TX -> uart1 RX -> host COM1 RX,
+    # causing BIOS to see spurious ESC/H characters as keyboard input.
+    # This must run before obmc-console opens the device (which sets TIOCEXCL,
+    # after which external stty calls return ENOTTY).
+    stty -F /dev/ttyS1 raw -echo -echoe -echok -echonl 2>/dev/null || true
+
     setup_routing
 
     hostserialcfg=$(fw_printenv hostserialcfg 2>/dev/null)
