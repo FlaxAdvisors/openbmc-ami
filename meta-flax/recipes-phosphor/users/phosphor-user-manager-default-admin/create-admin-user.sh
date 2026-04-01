@@ -124,4 +124,17 @@ done
 # Enable user
 ipmitool user enable 2 2>/dev/null
 
+# ---------------------------------------------------------------------------
+# 6. Enable root (user 1) for LAN callin
+# ---------------------------------------------------------------------------
+# root defaults to callin=false; set callin=on so ipmitool -U root works over LAN
+for i in $(seq 1 5); do
+    if ipmitool channel setaccess 1 1 callin=on privilege=4 2>/dev/null; then
+        echo "Root channel access set successfully"
+        break
+    fi
+    echo "Attempt $i to set root channel access failed, retrying..."
+    sleep 2
+done
+
 echo "Admin user setup complete"

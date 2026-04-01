@@ -27,8 +27,8 @@ in U-Boot.
 
 Signed-off-by: OpenBMC Build <openbmc@build>
 ---
- board/aspeed/evb_ast2500/tiogapass.c | 18 ++++++++++++++++--
- 1 file changed, 16 insertions(+), 2 deletions(-)
+ board/aspeed/evb_ast2500/tiogapass.c | 26 ++++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
 
 --- a/board/aspeed/evb_ast2500/tiogapass.c
 +++ b/board/aspeed/evb_ast2500/tiogapass.c
@@ -63,7 +63,7 @@ Signed-off-by: OpenBMC Build <openbmc@build>
  																												\
  	/* Set Uart1 to debug console */																			\
      *(volatile ulong *) (LPC_REG_BASE + HICRA_OFFSET ) &=  0xF0F0FFFF;											\
-@@ -377,6 +381,16 @@
+@@ -377,6 +381,24 @@
      *((volatile ulong*)(0x1e789080)) &= ~(0xFF000000);															\
      *((volatile ulong*)(0x1e789080)) |= ((1 << 31) | (1 << 30) | (7 << 24)) ;								    \
      /*--- end of port 80 re-direction ---*/																		\
@@ -74,9 +74,17 @@ Signed-off-by: OpenBMC Build <openbmc@build>
 +    *((volatile ulong *) (0x1e789008)) |= (1 << 2);                                                            \
 +    /* HICR4: set bit 7 - enable SuperIO UART1 address decode */                                                \
 +    *((volatile ulong *) (0x1e789010)) |= (1 << 7);                                                            \
-+    /* HICRB: SuperIO UART1 address/IRQ mapping (read-only from Linux) */                                       \
-+    *((volatile ulong *) (0x1e789094)) = 0xFFEFFFD5;                                                           \
-+    /*--- end of SuperIO UART1 config ---*/                                                                     \
++    /* HICRB: SuperIO UART1+UART2 address/IRQ mapping (read-only from Linux).        */                        \
++    /* OEM-confirmed value: configures both COM0 (0x3F8) and COM1 (0x2F8) SuperIO.  */                        \
++    *((volatile ulong *) (0x1e789094)) = 0xFFA9FFAB;                                                           \
++    /*--- end of SuperIO UART1+UART2 config ---*/                                                               \
++    /*--- LPC COM1 (BIOS "COM1" = 0x2F8) -> UART4 (ttyS3) for bidirectional SOL ---*/                         \
++    /* HICRC maps LPC 0x2F8 directly to UART4 hardware (OEM-confirmed value 0x0A30). */                        \
++    /* BIOS outputs to BOTH COM0 (0x3F8) and COM1 (0x2F8) simultaneously.            */                        \
++    /* This path is direct LPC hardware decode - no UART crossbar, no echo feedback. */                        \
++    /* No BIOS change needed: BIOS already has COM0+COM1 enabled (same as OEM setup).*/                        \
++    *((volatile ulong *) (0x1e789098)) = 0x00000A30;                                                           \
++    /*--- end of LPC COM1 / UART4 config ---*/                                                                          \
                                                                                                             		\
  	/* config simple GPIO 0 data and direction */                                                        		\
  	*(volatile ulong *) (GPIO_REG_BASE + GPIOIJKL_OFFSET + GPIO_DAT) |= 0x20000004;  /* Data: GPIOLKJI */ 		\

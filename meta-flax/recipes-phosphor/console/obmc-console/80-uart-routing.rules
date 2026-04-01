@@ -1,13 +1,7 @@
-# Route ASPEED UART crossbar: uart2 from uart1 (ONE-WAY), uart4 <-> io1
-# SuperIO (LPC COM1 0x3F8) feeds into uart1 TX path in crossbar.
-# uart2 source=uart1: host COM1 TX -> ttyS1 RX -> obmc-console reads host output.
-# Do NOT set uart1 source=uart2: that creates a return path uart2 TX -> LPC UART1
-# host RX FIFO -> host COM1 RX, which BIOS interprets as keyboard input (spurious
-# ESC/H characters entering BIOS setup). Asymmetric routing silences the noise.
-# This fires when the uart_routing platform driver binds, before services start.
-# ROUTER path matches sol-configure.sh: /sys/bus/platform/drivers/aspeed-uart-routing/*.uart-routing
-ACTION=="add", SUBSYSTEM=="platform", DRIVER=="aspeed-uart-routing", \
-    RUN+="/bin/sh -c 'R=/sys/bus/platform/drivers/aspeed-uart-routing/%k; echo uart1 > $R/uart2; echo io1 > $R/uart4; echo uart4 > $R/io1'"
+# TiogaPass SOL uses UART4 (ttyS3) via direct LPC COM1 (0x2F8) hardware decode (HICRC).
+# No UART crossbar routing needed: COM1->UART4 is pure LPC hardware decode, set in U-Boot.
+# The old crossbar rule (uart2 <- uart1 for ttyS1) is intentionally removed because
+# UART2 TX echo -> UART1 RX -> host COM0 RX caused BIOS keyboard noise (spurious ESC/H).
 
-# Tag ttyS1 so systemd creates a device unit (dev-ttyS1.device) for it.
-SUBSYSTEM=="tty", KERNEL=="ttyS1", TAG+="systemd"
+# Tag ttyS3 so systemd creates a device unit (dev-ttyS3.device) for it.
+SUBSYSTEM=="tty", KERNEL=="ttyS3", TAG+="systemd"

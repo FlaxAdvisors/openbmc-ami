@@ -1,0 +1,28 @@
+From: FlaxAdvisors
+Subject: sol: fix obmc-console service path match string in registerSOLServiceChangeCallback
+
+The match string "_6fbmc_2dconsole" is an incorrect D-Bus path encoding.
+D-Bus path encoding keeps alphanumeric characters (including 'o' = 0x6f)
+as-is. On TiogaPass, the active console service is obmc-console@ttyS3,
+whose D-Bus path component is "obmc_2dconsole_40ttyS3". The old string
+contains no substring match for this path.
+
+Without this fix, matchPtrSOL stays null on every call because
+getDbusObject throws "Failed to find object which matches".
+registerSOLServiceChangeCallback() is called on every console byte
+received (because matchPtrSOL == nullptr), flooding the journal with:
+  "Failed to find object which matches"
+  "Failed to get service path in registerSOLServiceChangeCallback"
+
+--- a/sol/sol_manager.cpp
++++ b/sol/sol_manager.cpp
+@@ -238,7 +238,7 @@ void registerSOLServiceChangeCallback()
+     try
+     {
+         auto servicePath = ipmi::getDbusObject(
+             bus, "xyz.openbmc_project.Control.Service.Attributes",
+-            "/xyz/openbmc_project/control/service", "_6fbmc_2dconsole");
++            "/xyz/openbmc_project/control/service", "obmc_2dconsole_40ttyS3");
+
+         if (!std::empty(servicePath.first))
+         {
