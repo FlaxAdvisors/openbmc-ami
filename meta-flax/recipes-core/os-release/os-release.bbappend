@@ -1,22 +1,34 @@
 # Flax-branded version string for TiogaPass builds.
 #
-# Format (dev):     Flax-OneTree-<version>-<timestamp>  e.g. Flax-OneTree-1.0-202603271523
-# Format (release): Flax-OneTree-<version>              e.g. Flax-OneTree-1.0
+# Format (dev):     flax-onetree-<version>-<timestamp>  e.g. flax-onetree-1.0.0-202604011404
+# Format (release): flax-onetree-<version>              e.g. flax-onetree-1.0.0
 #
 # To cut a release build:  set FLAX_RELEASE = "1" in local.conf or on the bitbake command line
 # To bump the version:     change FLAX_VERSION below
 
-FLAX_VERSION = "1.0"
+FLAX_VERSION = "1.0.0"
 FLAX_RELEASE ?= "0"
 
-# Use BitBake's DATETIME (YYYYMMDDHHmmSS, 14 chars) sliced to minute precision (12 chars).
-# DATETIME is in BB_HASHBASE_WHITELIST so it doesn't cause hash non-determinism.
-FLAX_TIMESTAMP = "${@d.getVar('DATETIME')[0:12]}"
+# Anonymous python block runs after version-vars.inc's python() block (which is required by
+# meta-common and meta-ami bbappends and calls d.setVar() to override regular assignments).
+# Our python() runs last because meta-flax has the highest priority and is parsed last.
+python() {
+    flax_version = d.getVar('FLAX_VERSION') or '1.0.0'
+    flax_release = d.getVar('FLAX_RELEASE') or '0'
+    # DATETIME is in BB_HASHBASE_WHITELIST -- safe to use without causing sstate hash churn.
+    dt = d.getVar('DATETIME') or ''
+    timestamp = dt[0:12] if len(dt) >= 12 else dt
 
-FLAX_VER_STRING = "${@'Flax-OneTree-' + d.getVar('FLAX_VERSION') + ('' if d.getVar('FLAX_RELEASE') == '1' else '-' + d.getVar('DATETIME')[0:12])}"
+    if flax_release == '1':
+        ver_string = 'flax-onetree-' + flax_version
+    else:
+        ver_string = 'flax-onetree-' + flax_version + '-' + timestamp
 
-OPENBMC_VERSION = "${FLAX_VER_STRING}"
-VERSION_ID = "${FLAX_VER_STRING}"
-VERSION = "Flax-OneTree-${FLAX_VERSION}"
-IPMI_MAJOR = "${@(d.getVar('FLAX_VERSION') or '1.0').split('.')[0]}"
-IPMI_MINOR = "${@((d.getVar('FLAX_VERSION') or '1.0').split('.') + ['0'])[1]}"
+    d.setVar('OPENBMC_VERSION', ver_string)
+    d.setVar('VERSION_ID', ver_string)
+    d.setVar('VERSION', 'flax-onetree-' + flax_version)
+
+    parts = (flax_version + '.0.0').split('.')
+    d.setVar('IPMI_MAJOR', parts[0])
+    d.setVar('IPMI_MINOR', parts[1])
+}
