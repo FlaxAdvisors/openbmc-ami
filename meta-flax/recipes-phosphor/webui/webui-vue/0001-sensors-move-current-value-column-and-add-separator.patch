@@ -1,0 +1,53 @@
+From: Flax Advisors
+Subject: sensors: move Current Value column right after Status; add right-border separator
+
+Move the currentValue field from its original position (between lowerCaution
+and upperCaution) to immediately follow the Status column.  This groups the
+most-important per-sensor data (current reading) visually adjacent to health
+status rather than burying it between threshold columns.
+
+Add a black right-hand border to the header and data cells of the
+Current Value column so the threshold columns are visually separated
+from the primary data.
+
+---
+ src/views/HardwareStatus/Sensors/Sensors.vue | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+--- a/src/views/HardwareStatus/Sensors/Sensors.vue
++++ b/src/views/HardwareStatus/Sensors/Sensors.vue
+@@ -253,6 +253,13 @@ export default {
+           label: this.$t('pageSensors.table.status'),
+           tdClass: 'text-nowrap',
+         },
++        {
++          key: 'currentValue',
++          formatter: this.dataFormatter,
++          label: this.$t('pageSensors.table.currentValue'),
++          tdClass: 'current-value-cell',
++          thClass: 'current-value-cell',
++        },
+         {
+           key: 'lowerCritical',
+           formatter: this.dataFormatter,
+@@ -263,12 +270,6 @@ export default {
+           formatter: this.dataFormatter,
+           label: this.$t('pageSensors.table.lowerWarning'),
+         },
+-
+-        {
+-          key: 'currentValue',
+-          formatter: this.dataFormatter,
+-          label: this.$t('pageSensors.table.currentValue'),
+-        },
+         {
+           key: 'upperCaution',
+           formatter: this.dataFormatter,
+@@ -521,4 +522,7 @@ export default {
+ .m10 {
+   margin-right: 10px;
+ }
++.current-value-cell {
++  border-right: 1px solid #000 !important;
++}
+ </style>
