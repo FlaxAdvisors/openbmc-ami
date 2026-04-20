@@ -1,0 +1,19 @@
+--- a/src/cpuinfo_utils.cpp
++++ b/src/cpuinfo_utils.cpp
+@@ -291,9 +291,12 @@ void initializeConnections(
+     // xyz.openbmc_project.Host.Misc.Manager has Intel specific dependencies.
+     // If it is not available, then we can use the OperatingSystemState in
+     // xyz.openbmc_project.State.OperatingSystem. According to x86-power-control
+     // repo, OperatingSystemState should return "standby" once the POST is
+     // asserted.
+-    subscribeToProperty("xyz.openbmc_project.State.OperatingSystem",
+-                        "/xyz/openbmc_project/state/os",
+-                        "xyz.openbmc_project.State.OperatingSystem.Status",
+-                        "OperatingSystemState", updateOsState);
++    // On AMI-modified TiogaPass power-control, OperatingSystem.Status is
++    // published at /state/host0 (not /state/os).  Subscribe there so that
++    // cpuinfo correctly detects POST-done without requiring CoreBiosDone.
++    subscribeToProperty("xyz.openbmc_project.State.Host0",
++                        "/xyz/openbmc_project/state/host0",
++                        "xyz.openbmc_project.State.OperatingSystem.Status",
++                        "OperatingSystemState", updateOsState);

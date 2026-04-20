@@ -17,4 +17,5 @@ PACKAGECONFIG:append:tiogapass = " cpuinfo smbios-ipmi-blob"
 
 SRC_URI:append:tiogapass = " \
     file://0001-Add-SMBIOS-drive-and-NIC-inventory.patch \
+    file://0002-cpuinfo-subscribe-to-os-state-on-host0.patch \
 "
