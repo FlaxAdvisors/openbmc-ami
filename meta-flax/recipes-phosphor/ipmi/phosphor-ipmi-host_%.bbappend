@@ -11,4 +11,5 @@ SRC_URI += " \
             file://0004-fix-allowlist-empty-restricted-mode.patch \
             file://0005-fix-sdr-empty-sensor-table-crash.patch \
             file://0006-restore-sel-cache-init.patch \
+            file://0007-fix-poh-counter-not-implemented.patch \
 "

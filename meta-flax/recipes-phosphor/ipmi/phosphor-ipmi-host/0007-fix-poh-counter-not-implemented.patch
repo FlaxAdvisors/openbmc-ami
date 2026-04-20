@@ -1,0 +1,30 @@
+From: FlaxAdvisors
+Subject: Return CommandNotAvailable for Get POH Counter
+
+phosphor-chassis-state-manager (which provides the
+xyz.openbmc_project.State.PowerOnHours D-Bus interface) is not
+installed on this platform. Without it, the handler throws and
+returns responseUnspecifiedError. Return D5 (CommandNotAvailable)
+instead so callers get a clear "not supported" response.
+
+--- a/chassishandler.cpp
++++ b/chassishandler.cpp
+@@ -2831,17 +2831,7 @@
+               >
+     ipmiGetPOHCounter()
+ {
+-    // sd_bus error
+-    try
+-    {
+-        return ipmi::responseSuccess(static_cast<uint8_t>(poh::minutesPerCount),
+-                                     getPOHCounter());
+-    }
+-    catch (const std::exception& e)
+-    {
+-        lg2::error("getPOHCounter error: {ERROR}", "ERROR", e);
+-        return ipmi::responseUnspecifiedError();
+-    }
++    return ipmi::responseCommandNotAvailable();
+ }
+
+ ipmi::RspType<uint3_t, // policy support
