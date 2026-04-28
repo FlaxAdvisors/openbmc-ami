@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: meta-flax <meta-flax@tiogapass>
+Date: Mon, 07 Apr 2025 00:00:00 +0000
+Subject: [PATCH] Fix BIOS activation and failure cleanup in FWUPD_SCRIPT mode
+
+Three bugs fixed:
+
+1. In the FWUPD_SCRIPT activation path, flashWrite() (fwupd@.service,
+   looks for image-bmc) is called for all VersionPurpose values.  Add
+   an early-return for VersionPurpose::Host that calls flashWriteHost()
+   (obmc-flash-host-bios@.service) instead.  Placed before the
+   WANT_SIGNATURE_VERIFY and apply-time check blocks so those patches
+   continue to apply cleanly.
+
+2. AMI patch 0007 comments out the #ifdef HOST_BIOS_UPGRADE block in
+   unitStateChange() that routes BIOS service state changes to
+   onStateChangesBios().  Add a duplicate block after the original so
+   that 0007 only comments the original, leaving this copy intact and
+   preserving the routing.
+
+3. onStateChangesBios() failure path only sets Activations::Failed but
+   leaves the D-Bus activation object alive and activationProgress set.
+   This blocks all subsequent upload attempts and causes the web UI to
+   show "Error in switching running and backup images" until BMC reboot.
+   Add cleanup matching the success path: reset activationProgress and
+   erase the version object so the web UI recovers immediately.
+
+Upstream-Status: Inappropriate [AMI integration bug]
+---
+--- a/activation.cpp
++++ b/activation.cpp
+@@ -104,6 +104,16 @@
+             activationProgress =
+                 std::make_unique<ActivationProgress>(bus, path);
+ 
++#ifdef HOST_BIOS_UPGRADE
++            auto purpose = parent.versions.find(versionId)->second->purpose();
++            if (purpose == VersionPurpose::Host)
++            {
++                activationProgress->progress(20);
++                flashWriteHost();
++                return softwareServer::Activation::activation(value);
++            }
++#endif
++
+ #ifdef WANT_SIGNATURE_VERIFY
+             fs::path uploadDir(IMG_UPLOAD_DIR);
+             if (!verifySignature(uploadDir / versionId, SIGNED_IMAGE_CONF_PATH))
+@@ -367,6 +377,19 @@
+     }
+ #endif
+ 
++    // AMI patch 0007 comments out the block above; this duplicate ensures
++    // BIOS service state changes are still routed to onStateChangesBios().
++#ifdef HOST_BIOS_UPGRADE
++    {
++        auto purpose = parent.versions.find(versionId)->second->purpose();
++        if (purpose == VersionPurpose::Host)
++        {
++            onStateChangesBios(msg);
++            return;
++        }
++    }
++#endif
++
+     onStateChanges(msg);
+ 
+     return;
+@@ -497,6 +520,12 @@
+             activation(softwareServer::Activation::Activations::Failed);
+ 
+             error("Bios upgrade failed.");
++
++            // Clean up so the web UI can recover without a BMC reboot.
++            activationProgress.reset(nullptr);
++            boost::asio::post(getIOContext(), [this]() {
++                this->parent.erase(this->versionId);
++            });
+         }
+     }
+ 

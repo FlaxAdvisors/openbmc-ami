@@ -6,17 +6,23 @@
 #
 # Argument: version-id (the subdirectory under /tmp/images/ holding image-bmc)
 #
-# image-bmc is the kernel fitImage (~35MB) and goes to the "kernel" MTD
-# partition (mtd3, 40MB), NOT to mtd0 (64MB full chip).  The rwfs UBI
-# partition (mtd4) is preserved and does not need to be touched.
+# image-bmc is the static.mtd image: it starts at flash offset 0 and contains
+# u-boot + kernel fitImage (~35MB total).  It must be written to the "bmc" MTD
+# device (mtd0, full 64MB chip) so that u-boot lands at the correct offset.
+# flashcp only erases/writes blocks up to the image size, so the rwfs partition
+# (mtd4) at the end of the chip is preserved.
 
 img_obj="${1}"
 IMG="/tmp/images/${img_obj}/image-bmc"
 
-# Find the "kernel" MTD partition by name
-kernel_mtd=$(grep -rl '^kernel$' /sys/class/mtd/*/name 2>/dev/null | head -n 1)
-KERNEL_DEV="/dev/${kernel_mtd:+$(basename "$(dirname "$kernel_mtd")")}"
-KERNEL_DEV="${KERNEL_DEV:-/dev/mtd3}"
+# Find the "bmc" MTD partition by name (the full chip, mtd0).
+# The static.mtd image starts at offset 0 and includes u-boot + kernel, so
+# it must be written to the full chip device, not just the kernel sub-partition.
+# flashcp only erases/writes the blocks covered by the image, so the rwfs
+# partition at the end of the chip is preserved.
+bmc_mtd=$(grep -rl '^bmc$' /sys/class/mtd/*/name 2>/dev/null | head -n 1)
+BMC_DEV="/dev/${bmc_mtd:+$(basename "$(dirname "$bmc_mtd")")}"
+BMC_DEV="${BMC_DEV:-/dev/mtd0}"
 
 update_pct() {
     busctl set-property xyz.openbmc_project.Software.BMC.Updater \
@@ -35,11 +41,11 @@ if [ ! -f "${IMG}" ]; then
     exit 1
 fi
 
-echo "fwupd: writing ${IMG} to ${KERNEL_DEV}"
+echo "fwupd: writing ${IMG} to ${BMC_DEV}"
 update_pct 10
 
-echo "fwupd: flashing kernel partition (takes ~2 minutes)..."
-flashcp -v "${IMG}" "${KERNEL_DEV}"
+echo "fwupd: flashing bmc (takes ~2 minutes)..."
+flashcp -v "${IMG}" "${BMC_DEV}"
 RC=$?
 
 if [ "${RC}" -ne 0 ]; then

@@ -12,4 +12,5 @@ SRC_URI += " \
             file://0005-fix-sdr-empty-sensor-table-crash.patch \
             file://0006-restore-sel-cache-init.patch \
             file://0007-fix-poh-counter-not-implemented.patch \
+            file://0008-fix-system-guid-fallback-to-machine-id.patch \
 "

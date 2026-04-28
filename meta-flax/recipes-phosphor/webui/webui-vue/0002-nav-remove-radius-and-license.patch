@@ -1,0 +1,41 @@
+From: Flax Advisors
+Subject: nav: remove Radius and Manage Licenses from AMI navigation
+
+Remove the Radius (RADIUS client) entry from Security and Access and the
+Manage Licenses entry from Settings.  Neither feature is available or
+functional on the TiogaPass platform; hiding them prevents user confusion.
+
+---
+ src/env/components/AppNavigation/ami.js | 14 --------------
+ 1 file changed, 14 deletions(-)
+
+--- a/src/env/components/AppNavigation/ami.js
++++ b/src/env/components/AppNavigation/ami.js
+@@ -338,13 +338,6 @@
+           route: '/settings/bsod',
+         });
+       }
+-      if (process.env.VUE_APP_ONETREE_LICENSE_ENABLED === 'true') {
+-        navigationItemsList.navigationItems[4].children.push({
+-          id: 'license',
+-          label: this.$t('appNavigation.license'),
+-          route: '/settings/license',
+-        });
+-      }
+       if (process.env.VUE_APP_ONETREE_KVM_ENABLED === 'true') {
+         navigationItemsList.navigationItems[4].children.push({
+           id: 'auto-video-settings',
+@@ -448,13 +441,6 @@
+           icon: 'iconLogs',
+         });
+       }
+-      if (process.env.VUE_APP_ONETREE_RADIUS_CLIENT_ENABLED === 'true') {
+-        navigationItemsList.navigationItems[6].children.push({
+-          id: 'radius',
+-          label: this.$t('appNavigation.radius'),
+-          route: '/security-and-access/radius',
+-        });
+-      }
+       if (process.env.VUE_APP_ONETREE_SESSION_ENABLED === 'true') {
+         navigationItemsList.navigationItems[6].children.push({
+           id: 'sessions',

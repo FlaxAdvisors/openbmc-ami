@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Wed, 08 Apr 2026 00:00:00 +0000
+Subject: [PATCH] fix: allow re-acquiring HttpPushUriTargetsBusy after failed update
+
+After a failed BMC firmware update the httpPushUriTargetBusy global
+stays true for the lifetime of the bmcweb process.  Without a BMC
+reboot the next update attempt hits the resourceInUse guard and shows
+"Error in switching running and backup images" in the WebUI.
+
+Remove the exclusive-lock guard.  On a single-user embedded BMC there
+is no concurrent-client scenario that requires it, and idempotent
+re-acquisition (true->true) is always safe.
+
+Upstream-Status: Inappropriate [single-platform workaround]
+---
+ redfish-core/lib/update_service.hpp | 8 --------
+ 1 file changed, 8 deletions(-)
+
+diff --git a/redfish-core/lib/update_service.hpp b/redfish-core/lib/update_service.hpp
+index 1111111..2222222 100644
+--- a/redfish-core/lib/update_service.hpp
++++ b/redfish-core/lib/update_service.hpp
+@@ -2162,14 +2162,6 @@ inline void handleUpdateServicePatch(
+
+     if (imgTargetBusy)
+     {
+-        if ((httpPushUriTargetBusy) && (*imgTargetBusy))
+-        {
+-            BMCWEB_LOG_DEBUG(
+-                "Other client has reserved the HttpPushUriTargets property for firmware updates.");
+-            messages::resourceInUse(asyncResp->res);
+-            return;
+-        }
+-
+         if (imgTargets)
+         {
+             if (!(*imgTargetBusy))

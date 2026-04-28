@@ -1,0 +1,25 @@
+From: Flax Advisors
+Subject: header: add Flax Advisors logo to the top navigation bar
+
+Display flax-logo.svg immediately to the right of the MegaRAC OneTree
+product logo in the navbar.
+
+---
+ src/components/AppHeader/AppHeader.vue | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+--- a/src/components/AppHeader/AppHeader.vue
++++ b/src/components/AppHeader/AppHeader.vue
+@@ -42,6 +42,12 @@
+               :alt="altLogo"
+             />
+           </b-navbar-brand>
++          <img
++            class="flax-logo ml-2"
++            height="30px"
++            src="../../assets/images/flax-logo.svg"
++            alt="Flax Advisors"
++          />
+           <div v-if="isNavTagPresent" :key="routerKey" class="pl-2 nav-tags">
+             <span>|</span>
+             <span class="pl-3 asset-tag">{{ assetTag }}</span>

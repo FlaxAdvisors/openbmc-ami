@@ -1,0 +1,46 @@
+From: Flax BMC <bmc@flaxadvisors.com>
+Subject: [PATCH] power-control: reset OperatingSystemState to Inactive on host power-on
+
+On TiogaPass the POST_COMPLETE GPIO is pulled high and stays asserted
+even when the host is powered off.  x86-power-control reads this GPIO
+at startup and initialises OperatingSystemState to "Standby" (POST
+complete) even with the host off.  The ipmid allowlist filter reads
+that state at startup, sets postCompleted=true, and keeps the KCS
+channel in restricted mode for the rest of the session.
+
+When the host later powers on the PostComplete GPIO never de-asserts
+(it was already high), so postCompleteHandler() never fires "Inactive"
+and the filter stays restricted throughout BIOS POST.  BIOS probe
+commands arrive on the KCS channel and are rejected with
+ccInsufficientPrivilege, causing the BIOS to abort its SMBIOS MDR V2
+push.  /var/lib/smbios/smbios2 is never written, and Redfish shows
+no CPU/DIMM inventory.
+
+Fix: when HostState transitions to Running (host DC power on), explicitly
+set OperatingSystemState to Inactive before PostComplete can assert.
+postCompleteHandler() will set it back to Standby when the BIOS
+actually asserts the PostComplete GPIO near the end of POST.
+
+This mirrors the existing fix at power-off (the upstream comment about
+POST_COMPLETE GPIO not working on some platforms).
+
+---
+ src/power_control.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -1701,6 +1701,13 @@ static void setOperatingSystemState(const OperatingSystemStateStage stage)
+             if (*currentHostState ==
+                 "xyz.openbmc_project.State.Host.HostState.Running")
+             {
++                // POST_COMPLETE GPIO may be stuck asserted on this platform
++                // when host powers on (hardware pullup keeps it high when
++                // off).  Reset to Inactive now so the IPMI allowlist filter
++                // passes BIOS KCS commands during POST.
++                // postCompleteHandler() will update back to Standby when the
++                // BIOS actually drives PostComplete at the end of POST.
++                setOperatingSystemState(OperatingSystemStateStage::Inactive);
+                 pohCounterTimerStart();
+                 // Clear the restart cause set for the next restart
+                 clearRestartCause();

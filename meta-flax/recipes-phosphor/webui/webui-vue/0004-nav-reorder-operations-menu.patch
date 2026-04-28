@@ -1,0 +1,150 @@
+From: Flax Advisors
+Subject: nav: reorder Operations submenu to most-useful-first
+
+Reorder the Operations submenu so the most frequently used items appear
+first: Server Power Operations, SOL Console, KVM, Virtual Media, then
+Reboot BMC, Firmware, Backup and Restore, Tasks, Preserve Configuration,
+Factory Default.
+
+Move all Operations children out of the static initializer array into
+explicit ordered push() calls so the insertion order is fully controlled.
+
+---
+ src/env/components/AppNavigation/ami.js | 94 ++++++++++++++++++++++++--------
+ 1 file changed, 71 insertions(+), 23 deletions(-)
+
+--- a/src/env/components/AppNavigation/ami.js
++++ b/src/env/components/AppNavigation/ami.js
+@@ -65,34 +65,7 @@
+         {
+           id: 'operations',
+           label: this.$t('appNavigation.operations'),
+           icon: 'iconControl',
+-          children: [
+-            {
+-              id: 'factory-default',
+-              label: this.$t('appNavigation.factoryDefault'),
+-              route: '/operations/factory-default',
+-            },
+-            {
+-              id: 'preserve-configuration',
+-              label: this.$t('appNavigation.preserveConfiguration'),
+-              route: '/operations/preserve-configuration',
+-            },
+-            {
+-              id: 'reboot-bmc',
+-              label: this.$t('appNavigation.rebootBmc'),
+-              route: '/operations/reboot-bmc',
+-            },
+-            {
+-              id: 'task',
+-              label: this.$t('appNavigation.tasks'),
+-              icon: 'iconTask',
+-              route: '/operations/tasks',
+-            },
+-            {
+-              id: 'firmware',
+-              label: this.$t('appNavigation.firmware'),
+-              route: '/operations/firmware',
+-            },
+-          ],
++          children: [],
+         },
+         {
+@@ -290,47 +263,73 @@
+           route: '/hardware-status/sensors',
+         });
+       }
+-      if (process.env.VUE_APP_ONETREE_BACKUP_RESTORE_ENABLED === 'true') {
+-        navigationItemsList.navigationItems[3].children.push({
+-          id: 'backup-and-restore',
+-          label: this.$t('appNavigation.backupAndRestore'),
+-          route: '/operations/backup-and-restore',
+-        });
+-      }
+-      if (process.env.VUE_APP_ONETREE_KVM_ENABLED === 'true') {
+-        navigationItemsList.navigationItems[3].children.push({
+-          id: 'kvm',
+-          label: this.$t('appNavigation.kvm'),
+-          route: '/operations/kvm',
+-        });
+-      }
+-      if (process.env.VUE_APP_ONETREE_SOL_ENABLED === 'true') {
+-        navigationItemsList.navigationItems[3].children.push({
+-          id: 'serial-over-lan',
+-          label: this.$t('appNavigation.serialOverLan'),
+-          route: '/operations/serial-over-lan',
+-          exclusiveToRoles: [roles.administrator],
+-        });
+-      }
+-      if (process.env.VUE_APP_ONETREE_POWER_ENABLED === 'true') {
++      if (process.env.VUE_APP_ONETREE_POWER_ENABLED === 'true') {
+         navigationItemsList.navigationItems[3].children.push({
+           id: 'server-power-operations',
+           label: this.$t('appNavigation.serverPowerOperations'),
+           route: '/operations/server-power-operations',
+         });
+       }
++      if (process.env.VUE_APP_ONETREE_SOL_ENABLED === 'true') {
++        navigationItemsList.navigationItems[3].children.push({
++          id: 'serial-over-lan',
++          label: this.$t('appNavigation.serialOverLan'),
++          route: '/operations/serial-over-lan',
++          exclusiveToRoles: [roles.administrator],
++        });
++      }
++      if (process.env.VUE_APP_ONETREE_KVM_ENABLED === 'true') {
++        navigationItemsList.navigationItems[3].children.push({
++          id: 'kvm',
++          label: this.$t('appNavigation.kvm'),
++          route: '/operations/kvm',
++        });
++      }
+       if (process.env.VUE_APP_ONETREE_MEDIA_REDIRECT_ENABLED === 'true') {
+         navigationItemsList.navigationItems[3].children.push({
+           id: 'virtual-media',
+           label: this.$t('appNavigation.virtualMedia'),
+           route: '/operations/virtual-media',
+           exclusiveToRoles: [
+             roles.administrator,
+             roles.operator,
+             roles.readonly,
+           ],
+         });
+       }
++      navigationItemsList.navigationItems[3].children.push({
++        id: 'reboot-bmc',
++        label: this.$t('appNavigation.rebootBmc'),
++        route: '/operations/reboot-bmc',
++      });
++      navigationItemsList.navigationItems[3].children.push({
++        id: 'firmware',
++        label: this.$t('appNavigation.firmware'),
++        route: '/operations/firmware',
++      });
++      if (process.env.VUE_APP_ONETREE_BACKUP_RESTORE_ENABLED === 'true') {
++        navigationItemsList.navigationItems[3].children.push({
++          id: 'backup-and-restore',
++          label: this.$t('appNavigation.backupAndRestore'),
++          route: '/operations/backup-and-restore',
++        });
++      }
++      navigationItemsList.navigationItems[3].children.push({
++        id: 'task',
++        label: this.$t('appNavigation.tasks'),
++        icon: 'iconTask',
++        route: '/operations/tasks',
++      });
++      navigationItemsList.navigationItems[3].children.push({
++        id: 'preserve-configuration',
++        label: this.$t('appNavigation.preserveConfiguration'),
++        route: '/operations/preserve-configuration',
++      });
++      navigationItemsList.navigationItems[3].children.push({
++        id: 'factory-default',
++        label: this.$t('appNavigation.factoryDefault'),
++        route: '/operations/factory-default',
++      });
+       if (process.env.VUE_APP_ONETREE_KVM_ENABLED === 'true') {
+         navigationItemsList.navigationItems[4].children.push({
+           id: 'bsod',

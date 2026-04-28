@@ -1,0 +1,94 @@
+From: Flax BMC <bmc@flaxadvisors.com>
+Subject: [PATCH] apphandler: fall back to machine-id UUID for Get System GUID
+
+ipmiAppGetSystemGuid() returns responseUnspecifiedError() when
+xyz.openbmc_project.Common.UUID is absent from D-Bus.  The Tioga Pass
+BIOS loops on Get System GUID (~20 retries over 34 seconds) and then
+aborts its SMBIOS push sequence when it keeps getting error responses,
+so /var/lib/smbios/smbios2 is never written.
+
+ipmiAppGetDeviceGuid() already generates a deterministic UUID from
+/etc/machine-id via sd_id128_get_machine_app_specific().  Do the same
+in ipmiAppGetSystemGuid() as a fallback so the BIOS receives a valid
+UUID and proceeds to push SMBIOS data.
+
+---
+ apphandler.cpp | 46 ++++++++++++++++++++++------------------------
+ 1 file changed, 22 insertions(+), 24 deletions(-)
+
+--- a/apphandler.cpp
++++ b/apphandler.cpp
+@@ -1179,43 +1179,39 @@
+     ipmi::DbusObjectInfo objectInfo{};
+     boost::system::error_code ec =
+         ipmi::getDbusObject(ctx, uuidInterface, objectInfo);
+-    if (ec.value())
++    if (!ec.value())
+     {
+-        lg2::error("Failed to locate System UUID object, "
+-                   "interface: {INTERFACE}, error: {ERROR}",
+-                   "INTERFACE", uuidInterface, "ERROR", ec.message());
++        // Read UUID property value from bmcObject
++        // UUID is in RFC4122 format Ex: 61a39523-78f2-11e5-9862-e6402cfc3223
++        std::string rfc4122Uuid{};
++        ec = ipmi::getDbusProperty(ctx, objectInfo.second, objectInfo.first,
++                                   uuidInterface, uuidProperty, rfc4122Uuid);
++        if (!ec.value())
++        {
++            try
++            {
++                return ipmi::responseSuccess(rfc4122ToIpmi(rfc4122Uuid));
++            }
++            catch (const InvalidArgument& e)
++            {
++                lg2::error("Failed in parsing BMC UUID property, "
++                           "interface: {INTERFACE}, property: {PROPERTY}, "
++                           "value: {VALUE}, error: {ERROR}",
++                           "INTERFACE", uuidInterface, "PROPERTY",
++                           uuidProperty, "VALUE", rfc4122Uuid, "ERROR", e);
++            }
++        }
+     }
+
+-    // Read UUID property value from bmcObject
+-    // UUID is in RFC4122 format Ex: 61a39523-78f2-11e5-9862-e6402cfc3223
+-    std::string rfc4122Uuid{};
+-    ec = ipmi::getDbusProperty(ctx, objectInfo.second, objectInfo.first,
+-                               uuidInterface, uuidProperty, rfc4122Uuid);
+-    if (ec.value())
+-    {
+-        lg2::error("Failed to read System UUID property, "
+-                   "interface: {INTERFACE}, property: {PROPERTY}, "
+-                   "error: {ERROR}",
+-                   "INTERFACE", uuidInterface, "PROPERTY", uuidProperty,
+-                   "ERROR", ec.message());
+-        return ipmi::responseUnspecifiedError();
+-    }
+-    std::array<uint8_t, 16> uuid;
+-    try
+-    {
+-        // convert to IPMI format
+-        uuid = rfc4122ToIpmi(rfc4122Uuid);
+-    }
+-    catch (const InvalidArgument& e)
+-    {
+-        lg2::error("Failed in parsing BMC UUID property, "
+-                   "interface: {INTERFACE}, property: {PROPERTY}, "
+-                   "value: {VALUE}, error: {ERROR}",
+-                   "INTERFACE", uuidInterface, "PROPERTY", uuidProperty,
+-                   "VALUE", rfc4122Uuid, "ERROR", e);
+-        return ipmi::responseUnspecifiedError();
+-    }
+-    return ipmi::responseSuccess(uuid);
++    // Fallback: no UUID on D-Bus — generate a deterministic UUID from
++    // /etc/machine-id so BIOS IPMI session setup can complete.
++    static constexpr sd_id128_t sysUuidAppId = SD_ID128_MAKE(
++        1f, 2e, 3d, 4c, 5b, 6a, 47, 89, a0, b1, c2, d3, e4, f5, 06, 17);
++    sd_id128_t sysUuid;
++    sd_id128_get_machine_app_specific(sysUuidAppId, &sysUuid);
++    char sysUuidCstr[SD_ID128_STRING_MAX];
++    std::string systemUuid = sd_id128_to_string(sysUuid, sysUuidCstr);
++    return ipmi::responseSuccess(rfc4122ToIpmi(systemUuid));
+ }
+
+ /**

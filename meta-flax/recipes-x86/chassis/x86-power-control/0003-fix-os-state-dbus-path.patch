@@ -1,0 +1,11 @@
+--- a/src/power_control.cpp
++++ b/src/power_control.cpp
+@@ -3857,7 +3857,6 @@
+     // OS State Interface
+     osIface = osServer.add_interface(
+-        "/xyz/openbmc_project/state/host" + node,
++        "/xyz/openbmc_project/state/os",
+         "xyz.openbmc_project.State.OperatingSystem.Status");
+
+-    // createInterface(osServer, "/xyz/openbmc_project/state/os");
+     //  Get the initial OS state based on POST complete
