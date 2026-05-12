@@ -14,9 +14,18 @@ SRC_URI += "file://0004-reset-os-state-inactive-on-host-power-on.patch"
 # AMI bmcweb (systems.hpp) hardcodes /state/host0 to read HostTransitionTimeOut
 # from xyz.openbmc_project.State.OperatingSystem.Status — moving it crashes bmcweb.
 # Instead, cpuinfo is patched (smbios-mdr 0002) to subscribe to /state/host0.
-SRC_URI:append:tiogapass = " file://power-config-host0.json"
+SRC_URI:append:tiogapass = " file://power-config-host0.json \
+                             file://tiogapass-aclost.conf"
 
 do_install:append:tiogapass() {
     install -m 0644 ${WORKDIR}/power-config-host0.json \
         ${D}/usr/share/x86-power-control/power-config-host0.json
+
+    # Always create /tmp/ACLost so x86-power-control applies the configured
+    # PowerRestorePolicy on every BMC boot.  See tiogapass-aclost.conf.
+    install -d ${D}${nonarch_libdir}/tmpfiles.d
+    install -m 0644 ${WORKDIR}/tiogapass-aclost.conf \
+        ${D}${nonarch_libdir}/tmpfiles.d/tiogapass-aclost.conf
 }
+
+FILES:${PN}:append:tiogapass = " ${nonarch_libdir}/tmpfiles.d/tiogapass-aclost.conf"

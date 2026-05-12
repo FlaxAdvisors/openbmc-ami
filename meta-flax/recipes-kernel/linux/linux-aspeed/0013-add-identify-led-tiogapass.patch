@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Mon, 11 May 2026 00:00:00 +0000
+Subject: [PATCH] arm: dts: aspeed: tiogapass: add front-panel identify LED
+
+The TiogaPass front-panel blue LED ("SERVER_POWER_LED") is wired to
+BMC GPIO AA2.  Without a gpio-leds node nothing claims that pin, so
+/sys/class/leds is empty, phosphor-led-sysfs has no LED to drive, and
+"ipmitool chassis identify" / Redfish IndicatorLED dead-end --
+GroupManager flips Asserted but the LED never blinks.
+
+Bind the LED to AA2 as a gpio-leds device named "identify" so the LED
+group manager can drive it through the existing enclosure_identify_blink
+group.  AA2 is wired active-low to the front-panel blue LED (AA2 low =
+LED lit), so use GPIO_ACTIVE_LOW.  Use default-state = "off" so the
+kernel does not contend with the higher-layer phosphor-led-manager,
+which will assert the power_on group when the host is running.
+
+Signed-off-by: local <local@local>
+---
+ arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+index 1111111..2222222 100644
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -65,8 +65,18 @@
+ 	iio-hwmon {
+ 		compatible = "iio-hwmon";
+ 		io-channels = <&adc 0>, <&adc 1>, <&adc 2>, <&adc 3>,
+ 			      <&adc 4>, <&adc 5>, <&adc 6>, <&adc 7>;
+ 	};
+
++	leds {
++		compatible = "gpio-leds";
++
++		identify {
++			label = "identify";
++			gpios = <&gpio ASPEED_GPIO(AA, 2) GPIO_ACTIVE_LOW>;
++			default-state = "off";
++		};
++	};
++
+ };
+
+ &uart_routing {
+--
+2.40.0
