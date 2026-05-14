@@ -1,0 +1,36 @@
+From: harlan <hmccanne@exclamationpoint.com>
+Subject: [PATCH] Enable FMC chip-select 1 for backup BMC flash on TiogaPass
+
+The AST2500 FMC controller supports two chip selects. CS0 holds the primary
+BMC flash (the "bmc" partition); CS1 is the second SPI socket used as a cold-
+boot backup device. Enable flash@1 with label "bmc-backup" so /sbin/backup-bmc-flash
+can find and write the chip via flashcp.
+
+The chip is not pre-partitioned (the full image is written from offset 0), so
+no sub-partitions are declared. The MTD layer exposes the whole chip as a
+single device labelled "bmc-backup".
+---
+ .../boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+--- a/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
++++ b/arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts
+@@ -105,6 +105,17 @@
+ 		m25p,fast-read;
+ #include "openbmc-flash-layout-64-tioga.dtsi"
+ 	};
++
++	flash@1 {
++		status = "okay";
++		label = "bmc-backup";
++		m25p,fast-read;
++		spi-max-frequency = <50000000>;
++		/*
++		 * No sub-partitions: backup-bmc-flash writes the full
++		 * static.mtd image from offset 0 of the chip.
++		 */
++	};
+ };
+
+ &spi1 {

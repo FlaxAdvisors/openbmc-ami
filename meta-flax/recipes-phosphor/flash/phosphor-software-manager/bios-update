@@ -177,55 +177,29 @@ spi_mux_to_pch
 sleep 2
 
 # ── power on host ─────────────────────────────────────────────────────────────
-#
-# POWER_OUT (GPIOE3, line 35) is not wired to the PCH power button on TiogaPass.
-# The physical button connects to POWER_BUTTON (GPIOE2, line 34), which is
-# directly wired to the PCH PWR_BTN_N input.  Pulsing POWER_BUTTON LOW
-# (active-low, same as a physical press) is the only BMC-side mechanism that
-# works for software power-on.
-#
-# x86-power-control holds POWER_BUTTON as an input event consumer, so we must
-# stop it briefly, pulse line 34 LOW for 500 ms, then restart it.  Power-control
-# will re-detect the running state from SIO_POWER_GOOD on restart.
+# Use obmcutil to drive x86-power-control's normal power-on path
+# (xyz.openbmc_project.Chassis.Control.Power@0).  Fighting power-control
+# for the power-button GPIO directly never worked — it owns those lines
+# for the lifetime of the service.
 
-echo "bios-update: powering on host (direct power-button pulse)"
-systemctl stop x86-power-control || true
+echo "bios-update: powering on host (obmcutil poweron)"
+obmcutil poweron || true
 
-# Poll until GPIO 34 is released by x86-power-control (up to 15s).
-# gpioset keeps running while it holds the line; if it dies instantly the GPIO is still busy.
-CHIP=$(gpiodetect 2>/dev/null | head -n 1 | awk '{print $1}')
-CHIP="${CHIP:-gpiochip0}"
-_gpio_free=0
-for _i in $(seq 1 15); do
-    gpioset "${CHIP}" 34=0 &
-    PBPID=$!
-    sleep 0.2
-    if kill -0 "${PBPID}" 2>/dev/null; then
-        # Process is still running — GPIO claimed and held LOW
-        sleep 0.3   # complete ~500 ms pulse total
-        kill "${PBPID}" 2>/dev/null
-        wait "${PBPID}" 2>/dev/null || true
-        _gpio_free=1
-        break
-    fi
-    # gpioset exited immediately — GPIO still busy, try again
-    wait "${PBPID}" 2>/dev/null || true
-    sleep 1
+# Poll up to 60s for the host to leave Off.  power-control may still report
+# "power supply power good failed to assert" if the PSU does not respond;
+# in that case the user must AC-cycle the chassis to clear PSU state.
+STATE="unknown"
+for _i in $(seq 1 12); do
+    sleep 5
+    STATE=$(busctl get-property xyz.openbmc_project.State.Host \
+        /xyz/openbmc_project/state/host0 \
+        xyz.openbmc_project.State.Host CurrentHostState 2>/dev/null \
+        | awk '{print $2}' | tr -d '"')
+    case "${STATE}" in
+        *Off*) ;;
+        *) break ;;
+    esac
 done
-
-if [ "${_gpio_free}" = "1" ]; then
-    echo "bios-update: power button pulsed, waiting for host to power on..."
-    sleep 15
-else
-    echo "bios-update: warning: GPIO 34 busy after 15s — BIOS flashed OK, power on manually"
-fi
-
-systemctl start x86-power-control || true
-sleep 3
-
-STATE=$(busctl get-property xyz.openbmc_project.State.Host \
-    /xyz/openbmc_project/state/host0 \
-    xyz.openbmc_project.State.Host CurrentHostState 2>/dev/null | awk '{print $2}' | tr -d '"')
 echo "bios-update: host state after power-on: ${STATE:-unknown}"
 
 echo "bios-update: done at $(date)"
