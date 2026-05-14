@@ -5,6 +5,7 @@ SRC_URI:append:tiogapass = " \
     file://0002-nav-remove-radius-and-license.patch \
     file://0003-header-add-flax-logo.patch \
     file://0004-nav-reorder-operations-menu.patch \
+    file://0005-firmware-hide-backup-image-cards.patch \
     file://flax-logo.svg \
 "
 

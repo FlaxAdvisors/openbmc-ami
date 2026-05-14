@@ -21,7 +21,7 @@ Replace `<bmc-ip>` with the management IP of the BMC.
    - 5.1 [Web UI](#51-web-ui)
    - 5.2 [Redfish — Basic Auth](#52-redfish--basic-auth)
    - 5.3 [Redfish — Session Token](#53-redfish--session-token)
-6. [Backup BMC Image Update](#6-backup-bmc-image-update)
+6. [Update Image on Backup EEPROM](#6-update-image-on-backup-eeprom)
 7. [Checking Active Firmware Versions](#7-checking-active-firmware-versions)
 8. [Troubleshooting](#8-troubleshooting)
 
@@ -208,48 +208,61 @@ curl -sk -X POST https://<bmc-ip>/redfish/v1/Systems/system/Actions/ComputerSyst
 
 ---
 
-## 6. Backup BMC Image Update
+## 6. Update Image on Backup EEPROM
 
-TiogaPass has an optional second SPI flash chip ("backup BMC chip") that can be used to recover the BMC if the primary flash is corrupted. Writing to the backup chip is **not currently exposed in the Web UI or Redfish API** — it is performed from the BMC shell over SSH.
+TiogaPass has an optional second SPI flash chip (the **backup EEPROM**) installed in a secondary socket on the motherboard. The backup EEPROM holds a complete, ready-to-boot BMC image that can be used to recover the system if the primary chip becomes corrupted.
 
-The same `tiogapass-bmc-update.tar` used for the active BMC update is **not** used here; the backup procedure writes the raw BMC flash image (`image-bmc`) directly to the backup chip.
+The backup EEPROM is **never selected automatically** — it cannot be activated through the Web UI, Redfish, or any software switch. Recovery is a **hardware procedure**: the BMC is powered down, the backup chip is physically swapped into the primary socket, and the system is powered back up. Contact your hardware vendor for the chip-swap instructions specific to your chassis.
 
-### Procedure
+What administrators **can** do at any time is keep the image on the backup EEPROM up to date so that a future swap leaves the BMC running a known-good current firmware rather than something stale.
 
-1. SSH into the BMC:
+> Updating the backup EEPROM is not exposed in the Web UI or Redfish API. It is performed from the BMC shell over SSH. The same `tiogapass-bmc-update.tar` used in the Active BMC procedure is **not** used here — the backup tool writes a raw `image-bmc` directly to the chip.
+
+### When to refresh the backup EEPROM
+
+- After applying a BMC firmware update that you have verified is stable, so the backup chip mirrors the production version.
+- **Immediately after a recovery swap** — see [§6.3](#63-after-a-recovery-swap-refresh-the-new-backup) below.
+
+### 6.1 Prerequisites
+
+- A `image-bmc` file for the version you want on the backup chip. This is the raw BMC flash image; if you only have the update tar, extract it first:
+
+  ```bash
+  tar -xf tiogapass-bmc-update.tar image-bmc
+  ```
+
+- The backup EEPROM must be physically installed on the motherboard. If it is not present, the procedure will fail with `'bmc-backup' MTD partition not found` and no software change can work around it.
+
+### 6.2 Procedure
+
+1. Copy the raw image onto the BMC:
 
    ```bash
-   ssh root@<bmc-ip>
-   ```
-
-2. Copy the raw BMC image (`image-bmc`) onto the BMC, for example into `/tmp`:
-
-   ```bash
-   # On your workstation:
    scp image-bmc root@<bmc-ip>:/tmp/
    ```
 
-3. Run the backup flash tool:
+2. SSH into the BMC and run the backup flash tool:
 
    ```bash
+   ssh root@<bmc-ip>
    /sbin/backup-bmc-flash /tmp/image-bmc
    ```
 
-   The script locates the backup chip automatically, validates the image size, and writes the image (~2 minutes). It prints `done — backup chip is ready.` on success.
+   The tool locates the backup chip, validates the image size, and writes the chip (approximately 2 minutes). It prints `done — backup chip is ready.` on success. The active BMC keeps running normally throughout — no reboot is required.
 
-4. Remove the staged image:
+3. Clean up the staged image:
 
    ```bash
    rm /tmp/image-bmc
    ```
 
-### Errors
+### 6.3 After a recovery swap, refresh the new backup
 
-If the script reports `'bmc-backup' MTD partition not found`, the second SPI chip is not physically installed in the backup socket on the motherboard. No software change can work around this — the chip must be present.
+If you swapped the backup chip into the primary socket because the original primary was corrupted, the BMC is now running from what used to be the backup, and the slot that used to hold the primary is now empty (or holds a chip with the corrupted image).
 
-### Booting from the Backup Chip
+Once the BMC is back up and confirmed healthy, run the §6.2 procedure again on the running BMC with the current `image-bmc` so that the chip in the (now empty / previously corrupted) backup socket holds a fresh copy of the same firmware. Without this step the system has no backup left for a future failure.
 
-Recovery from the backup chip is a hardware procedure: power off the BMC, swap the backup chip into the primary socket, and power back on. Contact your hardware vendor for chip-swap instructions.
+If the corrupted chip was removed and not replaced, contact your hardware vendor to source and install a replacement chip before re-running §6.2.
 
 ---
 
