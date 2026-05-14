@@ -5,3 +5,4 @@ customrc
 .vscode/
 meta-ami/
 meta-common/
+bitbake-cookerdaemon.log

@@ -1,0 +1,114 @@
+From: Flax Advisors
+Subject: firmware: hide "Backup image" cards on the Firmware page
+
+The Firmware page renders a "Backup image" card alongside the running
+image for both BMC and Host (BIOS) firmware.  These cards are driven
+by upstream's dual-image / A-B-slot model (firmware inventory id
+"bmc_bkup" and the Host equivalent).
+
+The TiogaPass build uses phosphor-software-manager with
+bmc-static-dual-image=disabled and a single-image flash layout, so no
+"bmc_bkup" entry ever appears in
+/redfish/v1/UpdateService/FirmwareInventory and the Backup card
+permanently shows "--".  The empty card and its inert "Switch to
+running" button look like a feature an administrator can use and lead
+to support questions.
+
+Remove the Backup card from both BMC and Host card groups.  The
+Running card (BMC and Host) and the Host "Clear configuration" toggle
+are unchanged.  The IconSwitch import in FirmwareCardsBmc.vue was
+used only by the now-removed "Switch to running" button; drop it so
+the build passes eslint's no-unused-components rule.  The modal and
+switch-to-running action method are left in place to keep this patch
+surgical.
+
+---
+ .../Operations/Firmware/FirmwareCardsBmc.vue       | 34 +---------------------
+ .../Operations/Firmware/FirmwareCardsHost.vue      | 19 ------------
+ 2 files changed, 1 insertion(+), 52 deletions(-)
+
+--- a/src/views/Operations/Firmware/FirmwareCardsBmc.vue
++++ b/src/views/Operations/Firmware/FirmwareCardsBmc.vue
+@@ -19,37 +19,6 @@
+             </dd>
+           </dl>
+         </b-card>
+-
+-        <!-- Backup image -->
+-        <b-card>
+-          <template #header>
+-            <p class="font-weight-bold m-0">
+-              {{ $t('pageFirmware.cardTitleBackup') }}
+-            </p>
+-          </template>
+-          <dl>
+-            <dt>{{ $t('pageFirmware.cardBodyVersion') }}</dt>
+-            <dd>
+-              <status-icon v-if="showBackupImageStatus" status="danger" />
+-              <span v-if="showBackupImageStatus" class="sr-only">
+-                {{ backupStatus }}
+-              </span>
+-              {{ backupVersion }}
+-            </dd>
+-          </dl>
+-          <b-btn
+-            v-if="!switchToBackupImageDisabled"
+-            v-b-modal.modal-switch-to-running
+-            data-test-id="firmware-button-switchToRunning"
+-            variant="link"
+-            size="sm"
+-            class="py-0 px-1 mt-2"
+-            :disabled="isPageDisabled || !backup"
+-          >
+-            <icon-switch class="d-none d-sm-inline-block" />
+-            {{ $t('pageFirmware.cardActionSwitchToRunning') }}
+-          </b-btn>
+-        </b-card>
+       </b-card-group>
+     </page-section>
+     <modal-switch-to-running :backup="backupVersion" @ok="switchToRunning" />
+@@ -57,7 +26,6 @@
+ </template>
+
+ <script>
+-import IconSwitch from '@carbon/icons-vue/es/arrows--horizontal/20';
+ import PageSection from '@/components/Global/PageSection';
+ import LoadingBarMixin, { loading } from '@/components/Mixins/LoadingBarMixin';
+ import BVToastMixin from '@/components/Mixins/BVToastMixin';
+@@ -65,7 +33,7 @@
+ import ModalSwitchToRunning from './FirmwareModalSwitchToRunning';
+
+ export default {
+-  components: { IconSwitch, ModalSwitchToRunning, PageSection },
++  components: { ModalSwitchToRunning, PageSection },
+   mixins: [BVToastMixin, LoadingBarMixin],
+   props: {
+     isPageDisabled: {
+--- a/src/views/Operations/Firmware/FirmwareCardsHost.vue
++++ b/src/views/Operations/Firmware/FirmwareCardsHost.vue
+@@ -13,25 +13,6 @@
+           <dd class="mb-0">{{ runningVersion }}</dd>
+         </dl>
+       </b-card>
+-
+-      <!-- Backup image -->
+-      <b-card>
+-        <template #header>
+-          <p class="font-weight-bold m-0">
+-            {{ $t('pageFirmware.cardTitleBackup') }}
+-          </p>
+-        </template>
+-        <dl class="mb-0">
+-          <dt>{{ $t('pageFirmware.cardBodyVersion') }}</dt>
+-          <dd class="mb-0">
+-            <status-icon v-if="showBackupImageStatus" status="danger" />
+-            <span v-if="showBackupImageStatus" class="sr-only">
+-              {{ backupStatus }}
+-            </span>
+-            {{ backupVersion }}
+-          </dd>
+-        </dl>
+-      </b-card>
+       <b-card>
+         <template #header>
+           <p class="font-weight-bold m-0">

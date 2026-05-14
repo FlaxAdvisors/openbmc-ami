@@ -14,6 +14,7 @@ SRC_URI += " \
      file://0011-clk-aspeed-keep-d1clk-crt-running-for-kvm.patch \
      file://0012-enable-usb-vhub-for-kvm-hid-tiogapass.patch \
      file://0013-add-identify-led-tiogapass.patch \
+     file://0014-enable-fmc-cs1-bmc-backup.patch \
      file://tiogapass.cfg \
      file://openbmc-flash-layout-64-tioga.dtsi \
 "
