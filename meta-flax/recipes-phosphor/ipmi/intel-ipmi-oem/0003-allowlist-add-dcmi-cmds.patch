@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] allowlist: add DCMI group extension commands
+
+The intel-ipmi-oem allowlist filter enforces the allowlist unconditionally
+on non-system-interface channels (i.e. the LAN channel), independent of the
+RestrictionMode setting. The DCMI group extension commands (NetFn 0x2C,
+group 0xDC) were never present in ipmi-allowlist.conf, so any DCMI request
+over lanplus was rejected with completion code 0xD4 (insufficient privilege):
+
+    ipmitool ... -I lanplus dcmi discover
+    DCMI request failed because: Insufficient privilege level (d4)
+
+Add the full DCMI command set that phosphor-ipmi-host registers so DCMI works
+over LAN out of the box. Get/discover commands allow all channels (0xff7f);
+Set commands exclude the system interface (0x7f7f), matching the convention
+used by the other write commands in this file.
+---
+ ipmi-allowlist.conf | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+--- a/ipmi-allowlist.conf
++++ b/ipmi-allowlist.conf
+@@ -160,6 +160,21 @@
+ 0x2c:0x30:0x7f7f   //<Group Extension>:<Set TPM Configuration>
+ 0x2c:0x31:0x7f7f   //<Group Extension>:<TPM Configuration Update Complete>
+ 0x2c:0x37:0xff7f   //<Group Extension>:<Read PCIe Cable EEPROM Data>
++0x2c:0x01:0xff7f   //<Group Extension>:<DCMI Get DCMI Capabilities>
++0x2c:0x02:0xff7f   //<Group Extension>:<DCMI Get Power Reading>
++0x2c:0x03:0xff7f   //<Group Extension>:<DCMI Get Power Limit>
++0x2c:0x04:0x7f7f   //<Group Extension>:<DCMI Set Power Limit>
++0x2c:0x05:0x7f7f   //<Group Extension>:<DCMI Activate/Deactivate Power Limit>
++0x2c:0x06:0xff7f   //<Group Extension>:<DCMI Get Asset Tag>
++0x2c:0x07:0xff7f   //<Group Extension>:<DCMI Get DCMI Sensor Info>
++0x2c:0x08:0x7f7f   //<Group Extension>:<DCMI Set Asset Tag>
++0x2c:0x09:0xff7f   //<Group Extension>:<DCMI Get Mgmt Controller ID String>
++0x2c:0x0a:0x7f7f   //<Group Extension>:<DCMI Set Mgmt Controller ID String>
++0x2c:0x0b:0x7f7f   //<Group Extension>:<DCMI Set Thermal Limit>
++0x2c:0x0c:0xff7f   //<Group Extension>:<DCMI Get Thermal Limit>
++0x2c:0x10:0xff7f   //<Group Extension>:<DCMI Get Temperature Readings>
++0x2c:0x11:0xff7f   //<Group Extension>:<DCMI Get DCMI Config Params>
++0x2c:0x12:0x7f7f   //<Group Extension>:<DCMI Set DCMI Config Params>
+ 0x2e:0x80:0x8080   //<OpenBMC OEM>:<IPMI Blob Transfer - allow BIOS SMBIOS push via KCS/SMM>
+ 0x2e:0xC0:0x7f7f   //<Intel OEM>:<Enable/Disable Node Manager Policy Control>
+ 0x2e:0xC1:0x7f7f   //<Intel OEM>:<Set Node Manager Policy>
