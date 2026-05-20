@@ -45,8 +45,37 @@ echo "fwupd: writing ${IMG} to ${BMC_DEV}"
 update_pct 10
 
 echo "fwupd: flashing bmc (takes ~2 minutes)..."
-flashcp -v "${IMG}" "${BMC_DEV}"
-RC=$?
+
+# Parse flashcp -v progress (Erasing/Writing/Verifying counters) and translate
+# to D-Bus ActivationProgress updates so the WebUI bar moves through midpoints
+# instead of jumping 10 -> 100. Phases mapped to 10-40 / 40-70 / 70-95.
+set -o pipefail
+flashcp -v "${IMG}" "${BMC_DEV}" 2>&1 | tr '\r' '\n' | {
+    last_pct=10
+    phase=
+    while IFS= read -r line; do
+        case "$line" in
+            "Erasing blocks: "*)   phase=erase ;;
+            "Writing data: "*)     phase=write ;;
+            "Verifying data: "*)   phase=verify ;;
+            *) echo "$line"; continue ;;
+        esac
+        nums="${line#*: }"
+        cur="${nums%%/*}";  cur="${cur%k}"
+        rest="${nums#*/}";  tot="${rest%% *}";  tot="${tot%k}"
+        [ -n "$tot" ] && [ "$tot" -gt 0 ] || continue
+        case "$phase" in
+            erase)  pct=$((10 + 30 * cur / tot)) ;;
+            write)  pct=$((40 + 30 * cur / tot)) ;;
+            verify) pct=$((70 + 25 * cur / tot)) ;;
+        esac
+        if [ "$pct" -gt "$last_pct" ] && [ $((pct - last_pct)) -ge 5 ]; then
+            update_pct "$pct"
+            last_pct=$pct
+        fi
+    done
+}
+RC=${PIPESTATUS[0]}
 
 if [ "${RC}" -ne 0 ]; then
     echo "fwupd: flashcp failed (rc=${RC})"

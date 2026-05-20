@@ -15,6 +15,8 @@ SRC_URI += " \
      file://0012-enable-usb-vhub-for-kvm-hid-tiogapass.patch \
      file://0013-add-identify-led-tiogapass.patch \
      file://0014-enable-fmc-cs1-bmc-backup.patch \
+     file://0015-ncsi-set-perm-addr-from-oem-gma.patch \
+     file://0016-ipv6-regen-link-local-on-mac-change.patch \
      file://tiogapass.cfg \
      file://openbmc-flash-layout-64-tioga.dtsi \
 "

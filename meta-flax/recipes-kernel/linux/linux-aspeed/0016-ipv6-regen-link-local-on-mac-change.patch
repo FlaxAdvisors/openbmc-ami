@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] ipv6: addrconf: regenerate EUI-64 link-local on MAC change
+
+addrconf_notify() handles NETDEV_UP/NETDEV_CHANGE (generate the link-local
+when the carrier becomes ready) but has no NETDEV_CHANGEADDR case, so a
+hardware address change after autoconfiguration has run never refreshes the
+link-local.
+
+On TiogaPass this matters: the ftgmac100 NCSI interface registers eth0 with a
+u-boot placeholder MAC, the EUI-64 link-local is generated from it at
+carrier-up, and only later does the NCSI OEM Get-MAC command replace dev_addr
+with the NIC's real MAC (via dev_set_mac_address(), which emits
+NETDEV_CHANGEADDR).  The link-local stays derived from the stale placeholder
+MAC for the life of the interface.
+
+Handle NETDEV_CHANGEADDR by rebuilding the autoconfigured addresses from the
+new MAC, reusing the proven down/up cycle that the disable_ipv6 toggle uses
+(dev_disable_change()).  Restricted to EUI-64 generation mode -- the only mode
+whose link-local depends on the MAC -- and to an up, link-ready interface, so
+statically configured and non-autoconf interfaces are untouched.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+diff --git a/net/ipv6/addrconf.c b/net/ipv6/addrconf.c
+index a9358c796a81..3e7ba3ea31ab 100644
+--- a/net/ipv6/addrconf.c
++++ b/net/ipv6/addrconf.c
+@@ -3732,6 +3732,32 @@ static int addrconf_notify(struct notifier_block *this, unsigned long event,
+ 		addrconf_ifdown(dev, event != NETDEV_DOWN);
+ 		break;
+ 
++	case NETDEV_CHANGEADDR:
++		/* The hardware address changed after stateless autoconfiguration
++		 * already ran.  This happens with NC-SI: ftgmac100 registers the
++		 * interface with a bootloader placeholder MAC, the EUI-64
++		 * link-local is generated from it when the carrier first comes
++		 * up, and only later does the NCSI OEM Get-MAC command replace
++		 * dev_addr with the NIC's real MAC via dev_set_mac_address()
++		 * (which emits this event).  addrconf has no other path that
++		 * refreshes the link-local, so it stays derived from the stale
++		 * MAC.  Rebuild the autoconfigured addresses from the new MAC by
++		 * cycling IPv6 down then up, exactly as the disable_ipv6 toggle
++		 * does (see dev_disable_change()).  Restricted to EUI-64 mode --
++		 * the only address generation mode whose link-local depends on
++		 * the MAC -- and to a link that is up and ready, so that
++		 * statically configured and non-autoconf interfaces are left
++		 * untouched.
++		 */
++		if (!IS_ERR_OR_NULL(idev) && !idev->cnf.disable_ipv6 &&
++		    !(dev->priv_flags & IFF_NO_ADDRCONF) &&
++		    idev->cnf.addr_gen_mode == IN6_ADDR_GEN_MODE_EUI64 &&
++		    netif_running(dev) && addrconf_link_ready(dev)) {
++			addrconf_notify(this, NETDEV_DOWN, ptr);
++			addrconf_notify(this, NETDEV_UP, ptr);
++		}
++		break;
++
+ 	case NETDEV_CHANGENAME:
+ 		if (idev) {
+ 			snmp6_unregister_dev(idev);

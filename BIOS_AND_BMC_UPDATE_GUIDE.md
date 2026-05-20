@@ -131,14 +131,14 @@ curl -k -X POST https://<bmc-ip>/redfish/v1/UpdateService/update \
 
 ### 4.4 Monitoring Progress
 
-Poll the firmware inventory to watch activation state:
+The POST returns a Task `@odata.id` like `/redfish/v1/TaskService/Tasks/1`. Poll that URL to watch progress:
 
 ```bash
 curl -sk -u root:0penBmc \
-  https://<bmc-ip>/redfish/v1/UpdateService/FirmwareInventory | python3 -m json.tool
+  https://<bmc-ip>/redfish/v1/TaskService/Tasks/1 | python3 -m json.tool
 ```
 
-The `Status.State` field for the staged image transitions `Enabled` → `Activating`, and then the BMC reboots.
+`TaskState` transitions `Running` → `Completed`, after which the BMC reboots into the new image. The Task ID in the URL matches whatever the POST response returned — it is not always `1`.
 
 ---
 

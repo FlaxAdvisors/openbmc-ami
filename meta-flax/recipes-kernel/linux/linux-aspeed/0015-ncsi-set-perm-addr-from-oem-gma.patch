@@ -1,0 +1,46 @@
+From: harlan <hmccanne@exclamationpoint.com>
+Subject: [PATCH] net: ncsi: copy OEM Get-MAC result into perm_addr
+
+When CONFIG_NCSI_OEM_CMD_GET_MAC is enabled the NCSI state machine
+issues an OEM Get-MAC command during channel configuration and applies
+the discovered NIC MAC via dev_set_mac_address().  That only updates
+dev_addr; the netdev's perm_addr (exposed via IFLA_PERM_ADDRESS and
+ETHTOOL_GPERMADDR) keeps whatever value the driver registered with at
+probe time.  On TiogaPass the ftgmac100 driver reads a u-boot-generated
+locally-administered MAC out of the MAC_MADR/MAC_LADR registers, so
+`ip link show eth0` ends up reporting
+
+    link/ether b8:ce:f6:fc:1b:1c brd ff:ff:ff:ff:ff:ff permaddr a2:54:02:05:cb:2b
+
+even though b8:ce:... is the real Mellanox NIC MAC.
+
+The OEM-GMA response carries the NIC's burned-in address, so after the
+dev_set_mac_address() call succeeds also copy it into perm_addr and
+restore addr_assign_type to NET_ADDR_PERM (dev_set_mac_address has
+bumped it to NET_ADDR_SET).  After this patch perm_addr and dev_addr
+agree on the real hardware MAC.
+---
+ net/ncsi/ncsi-rsp.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/net/ncsi/ncsi-rsp.c b/net/ncsi/ncsi-rsp.c
+index f22d67cb04d3..f85552cadabb 100644
+--- a/net/ncsi/ncsi-rsp.c
++++ b/net/ncsi/ncsi-rsp.c
+@@ -658,10 +658,14 @@ static int ncsi_rsp_handler_oem_gma(struct ncsi_request *nr, int mfr_id)
+ 	rtnl_lock();
+ 	ret = dev_set_mac_address(ndev, &saddr, NULL);
+ 	rtnl_unlock();
+-	if (ret < 0)
++	if (ret < 0) {
+ 		netdev_warn(ndev, "NCSI: 'Writing mac address to device failed\n");
++		return ret;
++	}
+ 
+-	return ret;
++	memcpy(ndev->perm_addr, saddr.sa_data, ETH_ALEN);
++	ndev->addr_assign_type = NET_ADDR_PERM;
++	return 0;
+ }
+ 
+ /* Response handler for Mellanox card */
