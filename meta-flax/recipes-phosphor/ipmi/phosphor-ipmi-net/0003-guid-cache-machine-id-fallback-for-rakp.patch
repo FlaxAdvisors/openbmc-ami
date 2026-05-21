@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Thu, 21 May 2026 00:00:00 -0700
+Subject: [PATCH] guid: cache a machine-id GUID fallback when Common.UUID absent
+
+RAKP messages 2 and 4 must carry the 16-byte Managed System GUID, which
+getSystemGUID() reads from xyz.openbmc_project.Common.UUID over D-Bus.
+On platforms with no UUID provider (e.g. TiogaPass) that read throws and
+the canned fallback was returned WITHOUT being cached, so the blocking,
+failing ObjectMapper lookup re-ran on every single RAKP message (twice
+per session). On the single-core AST2500 this synchronous failing lookup
+starves netipmid's single-threaded event loop, so concurrent logins under
+a polling IPMI monitor see their RAKP packets answered late or not at all
+("no response from RAKP 1/3", intermittent session failures).
+
+Derive a deterministic GUID from /etc/machine-id (matching the in-band
+Get System GUID handler's app-id) and cache it, so the failing lookup runs
+at most once. The registered GUID-change callback still overrides the cache
+if a real UUID later appears on D-Bus.
+---
+ command/guid.cpp | 36 +++++++++++++++++++++++++++++++++---
+ 1 file changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/command/guid.cpp b/command/guid.cpp
+index a963f02..1a3c38a 100644
+--- a/command/guid.cpp
++++ b/command/guid.cpp
+@@ -7,6 +7,8 @@
+ #include <phosphor-logging/lg2.hpp>
+ #include <xyz/openbmc_project/Common/error.hpp>
+ 
++#include <systemd/sd-id128.h>
++
+ #include <sstream>
+ #include <string>
+ 
+@@ -87,8 +89,41 @@ const Guid& getSystemGUID()
+     }
+     catch (const sdbusplus::exception_t& e)
+     {
+-        lg2::error("Failed in reading BMC UUID property: {ERROR}", "ERROR", e);
+-        return fakeGuid;
++        // No xyz.openbmc_project.Common.UUID provider on D-Bus (e.g. on
++        // TiogaPass).  Fall back to a deterministic machine-id-derived GUID
++        // and cache it, so this blocking, failing ObjectMapper lookup is not
++        // repeated on every RAKP message.  Repeating it stalls netipmid's
++        // single-threaded event loop and causes intermittent "no response from
++        // RAKP" session failures under polling load.  The already-registered
++        // GUID-change callback still overrides this cache if a real UUID later
++        // appears on D-Bus.  The same machine-id app-id is used by the in-band
++        // Get System GUID handler so both report the same value.
++        lg2::debug("BMC UUID absent on D-Bus, using machine-id fallback: "
++                   "{ERROR}",
++                   "ERROR", e);
++        static constexpr sd_id128_t bmcGuidAppId = SD_ID128_MAKE(
++            1f, 2e, 3d, 4c, 5b, 6a, 47, 89, a0, b1, c2, d3, e4, f5, 06, 17);
++        sd_id128_t machineGuid{};
++        char guidStr[SD_ID128_STRING_MAX];
++        if (sd_id128_get_machine_app_specific(bmcGuidAppId, &machineGuid) >= 0)
++        {
++            try
++            {
++                Guid tmpGuid{};
++                rfcToGuid(sd_id128_to_string(machineGuid, guidStr), tmpGuid);
++                guid = tmpGuid;
++                return guid.value();
++            }
++            catch (const InvalidArgument& ia)
++            {
++                lg2::error("Failed parsing machine-id GUID: {ERROR}", "ERROR",
++                           ia);
++            }
++        }
++        // Last-resort: cache the canned GUID so we still never repeat the
++        // failing lookup.
++        guid = fakeGuid;
++        return guid.value();
+     }
+ 
+     std::string rfc4122Uuid = std::get<std::string>(propValue);
