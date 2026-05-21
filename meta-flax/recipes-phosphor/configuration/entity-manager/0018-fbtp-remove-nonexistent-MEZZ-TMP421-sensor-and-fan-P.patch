@@ -1,0 +1,97 @@
+From 83a47d7b0e8069ba879742bb015e39adc59a6289 Mon Sep 17 00:00:00 2001
+From: harlan <hmccanne@exclamationpoint.com>
+Date: Wed, 1 Apr 2026 16:43:47 +0000
+Subject: [PATCH 18/20] fbtp: remove nonexistent MEZZ TMP421 sensor and fan PID
+ entry
+
+- Remove MEZZ_SENSOR_REMOTE_TEMP / MEZZ_SENSOR_TEMP (TMP421 at bus 8 / 0x1f):
+  device does not exist on TiogaPass hardware; was reporting ~73C bogus
+  temperature and driving the fan PID zone unnecessarily.
+- Remove MEZZ_SENSOR_TEMP_STP stepwise fan controller that depended on it.
+---
+ configurations/fbtp.json | 48 ++--------------------------------------
+ 1 file changed, 2 insertions(+), 46 deletions(-)
+
+diff --git a/configurations/fbtp.json b/configurations/fbtp.json
+index 601cfca..25b19c1 100644
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -19,6 +19,7 @@
+                 }
+             ],
+             "Type": "ADC"
++
+         },
+         {
+             "Index": 1,
+@@ -195,6 +196,7 @@
+                 }
+             ],
+             "Type": "AspeedFan"
++
+         },
+         {
+             "Connector": {
+@@ -650,37 +652,6 @@
+                 "Left"
+             ]
+         },
+-        {
+-            "Class": "temp",
+-            "Inputs": [
+-                "MEZZ_SENSOR_TEMP"
+-            ],
+-            "Name": "MEZZ_SENSOR_TEMP_STP",
+-            "NegativeHysteresis": 1,
+-            "Output": [
+-                10.0,
+-                23.0,
+-                25.0,
+-                27.0,
+-                29.0,
+-                31.0,
+-                70.0
+-            ],
+-            "PositiveHysteresis": 1,
+-            "Reading": [
+-                84.0,
+-                85.0,
+-                87.0,
+-                89.0,
+-                91.0,
+-                93.0,
+-                95.0
+-            ],
+-            "Type": "Stepwise",
+-            "Zones": [
+-                "Left"
+-            ]
+-        },
+         {
+             "Class": "temp",
+             "Inputs": [
+@@ -873,21 +844,6 @@
+             ],
+             "Type": "TMP421"
+         },
+-        {
+-            "Address": "0x1f",
+-            "Bus": 8,
+-            "Name": "MEZZ_SENSOR_REMOTE_TEMP",
+-            "Name1": "MEZZ_SENSOR_TEMP",
+-            "Thresholds": [
+-                {
+-                    "Direction": "greater than",
+-                    "Name": "upper critical",
+-                    "Severity": 1,
+-                    "Value": 95
+-                }
+-            ],
+-            "Type": "TMP421"
+-        },
+         {
+             "Address": "0x48",
+             "Bus": 16,
+-- 
+2.34.1
+

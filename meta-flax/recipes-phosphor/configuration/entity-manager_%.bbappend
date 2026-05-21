@@ -12,6 +12,15 @@ SRC_URI:append = " file://SensorBoard.json"
 SRC_URI:append = " file://SensorSBFan.json"
 SRC_URI:append = " file://TNP-baseboard.json"
 SRC_URI:append = " file://0017-Add-tiogapass-configs-to-meson.patch"
+# fbtp.json fixes (exported from the devtool workspace):
+#  0018 - drop nonexistent MEZZ TMP421 sensor + fan PID entry
+#  0019 - convert HSC sensors to native PMBus (+ reindent)
+# (Board-level Decorator.Ipmi was dropped: entity-manager's global.json schema
+#  sets additionalProperties:false on boards and does not permit Decorator.Ipmi,
+#  so EM strips it. The ipmid SDR CPU storm is fixed by the intel-ipmi-oem
+#  per-path association cache (0004) instead.)
+SRC_URI:append = " file://0018-fbtp-remove-nonexistent-MEZZ-TMP421-sensor-and-fan-P.patch"
+SRC_URI:append = " file://0019-fbtp-convert-HSC-sensors-to-native-PMBus-reindent.patch"
 
 #RDEPENDS_${PN} += "default-fru"
 
