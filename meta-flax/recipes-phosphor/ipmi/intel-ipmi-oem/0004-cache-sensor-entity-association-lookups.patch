@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Tue, 20 May 2026 22:00:00 -0400
+Subject: [PATCH] sdr: cache sensor->board entity association lookups
+
+getSensorDataRecord() calls updateIpmiFromAssociation() for every SDR
+record, and ipmitool re-reads each record in multiple partial chunks, so
+the 2-3 synchronous blocking D-Bus lookups (ObjectMapper GetObject +
+EntityManager GetAll) run several times per sensor per `sdr` poll. On
+TiogaPass every one of them fails (the baseboard has no Decorator.Ipmi
+and sensor D-Bus names do not match EM config object names), producing
+hundreds of failing blocking calls and journal ERROR lines per `sdr
+elist`. On the single-core AST2500 this stalls ipmid's event loop, pins
+the CPU, and starves netipmid (SOL drops, RAKP timeouts).
+
+The Association -> Board -> EntityId mapping is static EM configuration,
+so cache the resolved {entityId, entityInstance} per sensor path; the
+lookups now run at most once per path. Also demote the "Failed to GetAll"
+log to debug, since a missing optional EM interface is normal.
+
+---
+--- a/include/sdrutils.hpp	2026-05-20 22:22:01.057186369 +0000
++++ b/include/sdrutils.hpp	2026-05-20 22:23:11.061184941 +0000
+@@ -493,7 +493,11 @@
+     }
+     catch (const std::exception& e)
+     {
+-        phosphor::logging::log<phosphor::logging::level::ERR>(
++        // A missing optional Entity-Manager interface (e.g. a board with no
++        // Decorator.Ipmi, or a sensor with no per-sensor config object) is
++        // normal on many platforms - log at debug level so it does not flood
++        // the journal (and burn CPU) on every SDR record build.
++        phosphor::logging::log<phosphor::logging::level::DEBUG>(
+             "Failed to GetAll", phosphor::logging::entry("PATH=%s", path),
+             phosphor::logging::entry("INTF=%s", interface),
+             phosphor::logging::entry("WHAT=%s", e.what()));
+@@ -546,6 +550,24 @@
+ {
+     namespace fs = std::filesystem;
+ 
++    // The Association -> Board -> EntityId mapping is static configuration
++    // provided by Entity-Manager and never changes at runtime. Resolving it
++    // costs 2-3 synchronous, blocking D-Bus round-trips, and
++    // getSensorDataRecord() calls this for every SDR record - which ipmitool
++    // re-reads in multiple partial chunks, rebuilding the record each time. On
++    // platforms where these lookups fail (no board Decorator.Ipmi / no
++    // per-sensor config object) this becomes a storm of failing blocking calls
++    // that stalls ipmid's single-threaded event loop and pins the CPU. Cache
++    // the resolved value per sensor path so the lookups run at most once.
++    static std::map<std::string, std::pair<uint8_t, uint8_t>> entityCache;
++    auto cacheEntry = entityCache.find(path);
++    if (cacheEntry != entityCache.end())
++    {
++        entityId = cacheEntry->second.first;
++        entityInstance = cacheEntry->second.second;
++        return;
++    }
++
+     auto sensorAssociationObject =
+         sensorMap.find("xyz.openbmc_project.Association.Definitions");
+     if (sensorAssociationObject == sensorMap.end())
+@@ -667,6 +689,8 @@
+         std::fprintf(stderr, "path=%s, entityId=%d, entityInstance=%d\n",
+                      path.c_str(), entityId, entityInstance);
+     }
++
++    entityCache[path] = {entityId, entityInstance};
+ }
+ 
+ } // namespace ipmi
