@@ -6,6 +6,7 @@ SRC_URI:append:tiogapass = " \
     file://0003-header-add-flax-logo.patch \
     file://0004-nav-reorder-operations-menu.patch \
     file://0005-firmware-hide-backup-image-cards.patch \
+    file://0006-enable-power-restore-policy-page.patch \
     file://flax-logo.svg \
 "
 

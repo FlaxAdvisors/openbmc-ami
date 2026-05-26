@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] Enable Power Restore Policy page unconditionally
+
+Upstream gates the Power Restore Policy settings page (both the route and
+the navigation entry) behind VUE_APP_ONETREE_AMD_POWERCAP_ENABLED ||
+VUE_APP_ONETREE_GPGPU_ENABLED. TiogaPass enables neither, so the page is
+hidden even though x86-power-control fully supports the policy. Remove the
+gate so the page is always available.
+---
+--- a/src/env/components/AppNavigation/ami.js
++++ b/src/env/components/AppNavigation/ami.js
+@@ -344,16 +344,11 @@
+           route: '/settings/auto-video',
+         });
+       }
+-      if (
+-        process.env.VUE_APP_ONETREE_AMD_POWERCAP_ENABLED === 'true' ||
+-        process.env.VUE_APP_ONETREE_GPGPU_ENABLED === 'true'
+-      ) {
+-        navigationItemsList.navigationItems[4].children.push({
+-          id: 'power-restore-policy',
+-          label: this.$t('appNavigation.powerRestorePolicy'),
+-          route: '/settings/power-restore-policy',
+-        });
+-      }
++      navigationItemsList.navigationItems[4].children.push({
++        id: 'power-restore-policy',
++        label: this.$t('appNavigation.powerRestorePolicy'),
++        route: '/settings/power-restore-policy',
++      });
+       if (process.env.VUE_APP_ONETREE_AMD_POWERCAP_ENABLED === 'true') {
+         navigationItemsList.navigationItems.push({
+           id: 'resource-management',
+--- a/src/env/router/ami.js
++++ b/src/env/router/ami.js
+@@ -507,19 +507,14 @@
+     },
+   });
+ }
+-if (
+-  process.env.VUE_APP_ONETREE_AMD_POWERCAP_ENABLED === 'true' ||
+-  process.env.VUE_APP_ONETREE_GPGPU_ENABLED === 'true'
+-) {
+-  routes[2].children.push({
+-    path: '/settings/power-restore-policy',
+-    name: 'power-restore-policy',
+-    component: PowerRestorePolicy,
+-    meta: {
+-      title: i18n.t('appPageTitle.powerRestorePolicy'),
+-    },
+-  });
+-}
++routes[2].children.push({
++  path: '/settings/power-restore-policy',
++  name: 'power-restore-policy',
++  component: PowerRestorePolicy,
++  meta: {
++    title: i18n.t('appPageTitle.powerRestorePolicy'),
++  },
++});
+ if (process.env.VUE_APP_ONETREE_SNMP_ENABLED == 'true') {
+   routes[2].children.push({
+     path: '/settings/snmp',

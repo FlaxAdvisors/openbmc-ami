@@ -1,0 +1,122 @@
+From 1a9436ff45a27c8f0f17088d6cf698409f4fc957 Mon Sep 17 00:00:00 2001
+From: Flax <harlan@flax>
+Date: Fri, 22 May 2026 20:06:25 +0000
+Subject: [PATCH] tiogapass: enable CPU error monitors (IERR/ERR2/thermtrip)
+
+Populate the stub error_monitors.hpp to instantiate the IERR (CATERR),
+ERR2, per-CPU thermal-trip and PCH thermal-trip monitors using the GPIO
+line names exposed by the TiogaPass DTS. IERR uses PECI to decode the
+failing socket + MCA banks; events publish on
+xyz.openbmc_project.HostErrorMonitor.Processor.* which sel-logger
+(log-host) bridges into the IPMI SEL.
+
+Include <systemd/sd-journal.h>/<syslog.h> first because the monitor
+headers use sd_journal_send()/LOG_INFO without including them.
+---
+ include/error_monitors.hpp | 65 +++++++++++++++++++++++++++++++-------
+ 1 file changed, 53 insertions(+), 12 deletions(-)
+
+diff --git a/include/error_monitors.hpp b/include/error_monitors.hpp
+index def14d5..6fe0fcb 100644
+--- a/include/error_monitors.hpp
++++ b/include/error_monitors.hpp
+@@ -14,35 +14,72 @@
+ // limitations under the License.
+ */
+ #pragma once
++// The monitor headers below use sd_journal_send()/LOG_INFO via log_message()
++// but do not include the system headers themselves; pull them in first so the
++// include order in this aggregation header is self-sufficient.
++#include <syslog.h>
++#include <systemd/sd-journal.h>
++
++#include <error_monitors/cpu_thermtrip_monitor.hpp>
++#include <error_monitors/err2_monitor.hpp>
++#include <error_monitors/ierr_monitor.hpp>
++#include <error_monitors/pch_thermtrip_monitor.hpp>
+ #include <sdbusplus/asio/object_server.hpp>
+-// #include <error_monitors/smi_monitor.hpp>
+ 
+ #include <memory>
+ 
+ namespace host_error_monitor::error_monitors
+ {
+-// Error signals to monitor
+-// static std::unique_ptr<host_error_monitor::smi_monitor::SMIMonitor>
+-// smiMonitor;
++// Error signals to monitor.
++// GPIO line names come from the TiogaPass DTS
++// (arch/arm/boot/dts/aspeed/aspeed-bmc-facebook-tiogapass.dts).
++static std::unique_ptr<host_error_monitor::ierr_monitor::IERRMonitor>
++    ierrMonitor;
++static std::unique_ptr<host_error_monitor::err2_monitor::Err2Monitor>
++    err2Monitor;
++static std::unique_ptr<
++    host_error_monitor::cpu_thermtrip_monitor::CPUThermtripMonitor>
++    cpu0ThermtripMonitor;
++static std::unique_ptr<
++    host_error_monitor::cpu_thermtrip_monitor::CPUThermtripMonitor>
++    cpu1ThermtripMonitor;
++static std::unique_ptr<
++    host_error_monitor::pch_thermtrip_monitor::PCHThermtripMonitor>
++    pchThermtripMonitor;
+ 
+ // Check if all the signal monitors started successfully
+ bool checkMonitors()
+ {
+     bool ret = true;
+ 
+-    // ret &= smiMonitor->isValid();
++    ret &= ierrMonitor->isValid();
++    ret &= err2Monitor->isValid();
++    ret &= cpu0ThermtripMonitor->isValid();
++    ret &= cpu1ThermtripMonitor->isValid();
++    ret &= pchThermtripMonitor->isValid();
+ 
+     return ret;
+ }
+ 
+ // Start the signal monitors
+-bool startMonitors(
+-    [[maybe_unused]] boost::asio::io_context& io,
+-    [[maybe_unused]] std::shared_ptr<sdbusplus::asio::connection> conn)
++bool startMonitors(boost::asio::io_context& io,
++                   std::shared_ptr<sdbusplus::asio::connection> conn)
+ {
+-    // smiMonitor =
+-    // std::make_unique<host_error_monitor::smi_monitor::SMIMonitor>(
+-    //     io, conn, "SMI");
++    ierrMonitor =
++        std::make_unique<host_error_monitor::ierr_monitor::IERRMonitor>(
++            io, conn, "CPU_CATERR_LVT3");
++    err2Monitor =
++        std::make_unique<host_error_monitor::err2_monitor::Err2Monitor>(
++            io, conn, "CPU_ERR2_LVT3");
++    cpu0ThermtripMonitor = std::make_unique<
++        host_error_monitor::cpu_thermtrip_monitor::CPUThermtripMonitor>(
++        io, conn, "CPU0_THERMTRIP_LATCH_LVT3", 0);
++    cpu1ThermtripMonitor = std::make_unique<
++        host_error_monitor::cpu_thermtrip_monitor::CPUThermtripMonitor>(
++        io, conn, "CPU1_THERMTRIP_LATCH_LVT3", 1);
++    pchThermtripMonitor = std::make_unique<
++        host_error_monitor::pch_thermtrip_monitor::PCHThermtripMonitor>(
++        io, conn, "PCH_BMC_THERMTRIP");
+ 
+     return checkMonitors();
+ }
+@@ -50,7 +87,11 @@ bool startMonitors(
+ // Notify the signal monitors of host on event
+ void sendHostOn()
+ {
+-    // smiMonitor->hostOn();
++    ierrMonitor->hostOn();
++    err2Monitor->hostOn();
++    cpu0ThermtripMonitor->hostOn();
++    cpu1ThermtripMonitor->hostOn();
++    pchThermtripMonitor->hostOn();
+ }
+ 
+ } // namespace host_error_monitor::error_monitors
+-- 
+2.34.1
+
