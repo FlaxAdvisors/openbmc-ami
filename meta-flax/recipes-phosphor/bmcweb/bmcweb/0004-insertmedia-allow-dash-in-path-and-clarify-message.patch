@@ -1,0 +1,33 @@
+From: harlan <hmccanne@exclamationpoint.com>
+Subject: [PATCH] bmcweb: allow '-' in InsertMedia NFS image path and clarify message
+
+validateImageUrl() (used for NFS image URLs) rejected any path containing a
+dash, because '-' was missing from the allowed character class -- so ordinary
+ISO names and FQDNs (e.g. openSUSE-Leap-15.6-...iso) failed with a confusing
+ActionParameterValueFormatError.  Add '-' to the path regex, and rewrite the
+journal message to name each allowed character unambiguously (forward slash,
+backslash, underscore, period, dash) instead of bare glyphs.
+---
+ redfish-core/lib/virtual_media.hpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/redfish-core/lib/virtual_media.hpp
++++ b/redfish-core/lib/virtual_media.hpp
+@@ -66,7 +66,7 @@
+     }
+ 
+     // Regular expression to match the allowed characters
+-    const std::regex pathPattern(R"(^[a-zA-Z0-9/_\\.]+$)");
++    const std::regex pathPattern(R"(^[a-zA-Z0-9/_\\.-]+$)");
+ 
+     // Regular expression to validate FQDN
+     const std::regex fqdnPattern(R"(^([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,6}$)");
+@@ -118,7 +118,7 @@
+     {
+         std::cerr
+             << "Error: Path = " << path
+-            << "contains invalid characters. Allowed characters are alpha-numeric, '/', '\\', '_', and '.'."
++            << "contains invalid characters. Allowed characters are alpha-numeric, forward slash '/', backslash '\\', underscore '_', period '.', and dash '-'."
+             << std::endl;
+         return false;
+     }

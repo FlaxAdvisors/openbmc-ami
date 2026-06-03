@@ -1,0 +1,41 @@
+From: harlan <hmccanne@exclamationpoint.com>
+Subject: [PATCH] net: ncsi: demote benign rsp validation/handler logs to debug
+
+During normal NCSI channel/package negotiation the controller legitimately
+emits responses that fail ncsi_rcv_rsp()'s validation (e.g. Set VLAN Filter,
+type 0x8b) or that a per-command handler rejects (e.g. a Deselect Package
+response, type 0x82, for a package/channel the host has already torn down,
+which ncsi_rsp_handler_dp() reports as -ENODEV).  The NCSI state machine
+recovers from both on its own, but the two messages are logged at warn/err
+level and flood the kernel log on every boot across the fleet.
+
+Demote both to netdev_dbg so they no longer appear in dmesg by default while
+remaining available via dynamic debug.  No functional change.
+---
+ net/ncsi/ncsi-rsp.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+--- a/net/ncsi/ncsi-rsp.c
++++ b/net/ncsi/ncsi-rsp.c
+@@ -1198,9 +1198,9 @@
+ 		payload = ntohs(hdr->length);
+ 	ret = ncsi_validate_rsp_pkt(nr, payload);
+ 	if (ret) {
+-		netdev_warn(ndp->ndev.dev,
+-			    "NCSI: 'bad' packet ignored for type 0x%x\n",
+-			    hdr->type);
++		netdev_dbg(ndp->ndev.dev,
++			   "NCSI: 'bad' packet ignored for type 0x%x\n",
++			   hdr->type);
+ 
+ 		if (nr->flags == NCSI_REQ_FLAG_NETLINK_DRIVEN) {
+ 			if (ret == -EPERM)
+@@ -1218,7 +1218,7 @@
+ 	/* Process the packet */
+ 	ret = nrh->handler(nr);
+ 	if (ret)
+-		netdev_err(ndp->ndev.dev,
++		netdev_dbg(ndp->ndev.dev,
+ 			   "NCSI: Handler for packet type 0x%x returned %d\n",
+ 			   hdr->type, ret);
+ 

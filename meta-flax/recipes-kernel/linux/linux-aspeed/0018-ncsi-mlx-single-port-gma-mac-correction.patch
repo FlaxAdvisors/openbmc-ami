@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] ncsi: correct Mellanox single-port GMA MAC to base+2
+
+The Mellanox OEM Get-MAC (GMA) response returns base_mac + (number of host
+ports). On a dual-port ConnectX-4 OCP card that coincidentally lands on the
+dedicated BMC management MAC (base+2), but on a single-port card it returns
+base+1 (the unused second-port slot), leaving the BMC one short of the MAC
+printed on the NIC label / expected by the host BIOS and OEM firmware.
+
+The kernel applies no correction for Mellanox (unlike the BCM/Intel paths,
+which already eth_addr_inc()). Bump the single-port Mellanox result by one so
+it reaches base+2. The package channel count is fully enumerated by the time
+the config-time GMA response is handled (TiogaPass has no mellanox,multi-host
+DT property, so the probe-time GMA path is not used). This correction flows
+into both dev_set_mac_address() and the perm_addr write added by
+0015-ncsi-set-perm-addr-from-oem-gma, so dev_addr and perm_addr both land on
+base+2. Dual-port and non-Mellanox cards are unaffected.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/net/ncsi/ncsi-rsp.c
++++ b/net/ncsi/ncsi-rsp.c
+@@ -649,6 +649,21 @@
+ 	memcpy(saddr.sa_data, &rsp->data[mac_addr_off], ETH_ALEN);
+ 	if (mfr_id == NCSI_OEM_MFR_BCM_ID || mfr_id == NCSI_OEM_MFR_INTEL_ID)
+ 		eth_addr_inc((u8 *)saddr.sa_data);
++
++	/*
++	 * Mellanox OEM Get-MAC returns base_mac + (number of host ports): on a
++	 * dual-port card that lands on the dedicated BMC management MAC
++	 * (base+2), but on a single-port card it is one short (base+1, which is
++	 * the unused second-port slot). These ConnectX-4 OCP "Host Management"
++	 * cards always reserve base+2 as the BMC MAC (per the NIC label / what
++	 * the host BIOS and OEM firmware expect), so bump the single-port
++	 * Mellanox result by one to reach base+2. channel_num is fully
++	 * enumerated by the time the config-time GMA response is handled.
++	 */
++	if (mfr_id == NCSI_OEM_MFR_MLX_ID && ndp->active_package &&
++	    ndp->active_package->channel_num == 1)
++		eth_addr_inc((u8 *)saddr.sa_data);
++
+ 	if (!is_valid_ether_addr((const u8 *)saddr.sa_data))
+ 		return -ENXIO;
+ 

@@ -1,0 +1,23 @@
+From: harlan <hmccanne@exclamationpoint.com>
+Subject: [PATCH] bmcweb: fix InsertMedia missing-credential message to say UserName
+
+The VirtualMedia.InsertMedia action reads the credential parameter as
+"UserName" (Redfish spec spelling) and logs it as such, but when it is
+missing the actionParameterMissing message reported "Username" (lower-case
+n).  Clients following the error message would send the wrong key and keep
+getting rejected.  Make the message match the spec/JSON key.
+---
+ redfish-core/lib/virtual_media.hpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/redfish-core/lib/virtual_media.hpp
++++ b/redfish-core/lib/virtual_media.hpp
+@@ -1031,7 +1031,7 @@
+             BMCWEB_LOG_ERROR("Request action parameter UserName is Missing.");
+ 
+             messages::actionParameterMissing(asyncResp->res, "InsertMedia",
+-                                             "Username");
++                                             "UserName");
+ 
+             return;
+         }
