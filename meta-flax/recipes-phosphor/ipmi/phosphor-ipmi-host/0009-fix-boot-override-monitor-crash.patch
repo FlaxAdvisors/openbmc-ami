@@ -1,0 +1,70 @@
+From: FlaxAdvisors
+Subject: Fix ipmid crash on host boot-override enable (uncaught SdBusError)
+
+MonitorIPMIBootOverrideOpt() is the D-Bus match callback for PropertiesChanged
+on /xyz/openbmc_project/control/host0/boot (xyz.openbmc_project.Object.Enable).
+When the boot one-time override "Enabled" flag is set true it makes two
+synchronous setDbusProperty() calls to "xyz.openbmc_project.OOBInventoryConfig"
+-- an AMI OOB service that is not present on this platform. sd_bus_call then
+throws sdbusplus SdBusError ("org.freedesktop.DBus.Error.ServiceUnknown: The
+name is not activatable").
+
+The callback runs inside sd_bus_process(); an uncaught exception propagates
+through sd-bus's C dispatch code and terminates ipmid (std::terminate ->
+abort, SIGABRT). systemd restarts ipmid and the next boot-override change
+aborts it again -> crash loop. Confirmed from two field coredumps.
+
+Wrap the body in try/catch (like GetInitialExtlogConfigs already does) so a
+boot-override change can never abort ipmid.
+
+--- a/ipmid-new.cpp
++++ b/ipmid-new.cpp
+@@ -973,20 +973,36 @@
+ 
+ void MonitorIPMIBootOverrideOpt(sdbusplus::message::message& msg)
+ {
+-    std::string interface;
+-    std::map<std::string, std::variant<bool>> properties;
+-    auto bus = sdbusplus::bus::new_default();
++    // This is a D-Bus signal match callback invoked from inside sd_bus_process.
++    // Any exception that escapes it propagates through sd-bus's C dispatch code
++    // (which is not exception-safe) and terminates ipmid (std::terminate ->
++    // abort). The serviceOOBInventoryConfig ("xyz.openbmc_project.OOBInventoryConfig")
++    // is an AMI OOB component that is not present on this platform, so the
++    // setDbusProperty() calls below throw sdbusplus SdBusError (ServiceUnknown /
++    // "not activatable") whenever the host boot-override Enabled flag is set.
++    // Catch and log so a boot-override change can never abort ipmid.
++    try
++    {
++        std::string interface;
++        std::map<std::string, std::variant<bool>> properties;
++        auto bus = sdbusplus::bus::new_default();
+ 
+-    msg.read(interface, properties);
+-    if (properties.find("Enabled") != properties.end() &&
+-        (std::get<bool>(properties["Enabled"])))
++        msg.read(interface, properties);
++        if (properties.find("Enabled") != properties.end() &&
++            (std::get<bool>(properties["Enabled"])))
++        {
++            ipmi::setDbusProperty(bus, serviceOOBInventoryConfig,
++                                  objPathMotherboard, interfaceControlBootOrder,
++                                  propertyBootSourceOverrideEnabled, "Disabled");
++            ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathOobCrc,
++                                  interfaceOobBiosConfigInventoryOobCrc,
++                                  propertyBootOverride, static_cast<uint64_t>(0));
++        }
++    }
++    catch (const std::exception& e)
+     {
+-        ipmi::setDbusProperty(bus, serviceOOBInventoryConfig,
+-                              objPathMotherboard, interfaceControlBootOrder,
+-                              propertyBootSourceOverrideEnabled, "Disabled");
+-        ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathOobCrc,
+-                              interfaceOobBiosConfigInventoryOobCrc,
+-                              propertyBootOverride, static_cast<uint64_t>(0));
++        lg2::error("MonitorIPMIBootOverrideOpt: ignoring D-Bus error: {ERROR}",
++                   "ERROR", e.what());
+     }
+ }
+ 
