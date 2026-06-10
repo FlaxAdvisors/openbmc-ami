@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000005 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Thu, 05 Jun 2026 00:00:00 +0000
+Subject: [PATCH] event log: show AdditionalData inline on row expand
+
+Event log entries that carry AdditionalData (for example a
+CriticalServiceFailure, whose attachment holds SYSTEMD_UNIT and
+SYSTEMD_RESULT) previously only offered a download button - the detail
+that makes the entry meaningful was never displayed.
+
+Add a store action that fetches the entry's AdditionalData attachment
+(bmcweb returns it as a { key: value } JSON object) and render those
+key/value pairs inline in the expandable row details.  The fetch is
+lazy (on expand) and cached per entry, so it adds no cost to the log
+listing.  This is generic: any source that attaches AdditionalData now
+shows its detail, not just CriticalServiceFailure.
+
+Upstream-Status: Pending
+---
+ src/store/modules/Logs/EventLogStore.js |  12 ++
+ src/views/Logs/EventLogs/EventLogs.vue  |  35 ++++
+ 2 files changed, 47 insertions(+)
+
+diff --git a/src/store/modules/Logs/EventLogStore.js b/src/store/modules/Logs/EventLogStore.js
+index 1111111..2222222 100644
+@@ -239,6 +239,18 @@
+           );
+         });
+     },
++    // Fetch the AdditionalData attachment for an entry and return it as a
++    // plain { key: value } object (e.g. { SYSTEMD_UNIT: '...' }) so the detail
++    // can be shown inline instead of only being downloadable.
++    async getEntryAdditionalData(_, uri) {
++      return await api
++        .get(uri)
++        .then(({ data }) => data)
++        .catch((error) => {
++          console.log(error);
++          return null;
++        });
++    },
+   },
+ };
+ 
+diff --git a/src/views/Logs/EventLogs/EventLogs.vue b/src/views/Logs/EventLogs/EventLogs.vue
+index 3333333..4444444 100644
+@@ -121,7 +121,7 @@
+               :aria-label="expandRowLabel"
+               :title="expandRowLabel"
+               class="btn-icon-only"
+-              @click="toggleRowDetails(row)"
++              @click="toggleRowDetailsWithData(row)"
+             >
+               <icon-chevron />
+             </b-button>
+@@ -162,6 +162,20 @@
+                   </b-button>
+                 </b-col>
+               </b-row>
++              <!-- Inline additional data (e.g. failing SYSTEMD_UNIT) so the
++                   detail is visible without downloading the attachment -->
++              <b-row v-if="additionalDataMap[item.id]">
++                <b-col>
++                  <dl
++                    v-for="(value, key) in additionalDataMap[item.id]"
++                    :key="key"
++                    class="mb-1"
++                  >
++                    <dt>{{ key }}:</dt>
++                    <dd class="mb-0">{{ value }}</dd>
++                  </dl>
++                </b-col>
++              </b-row>
+             </b-container>
+           </template>
+ 
+@@ -337,6 +351,8 @@
+   data() {
+     return {
+       isBusy: true,
++      // Per-entry AdditionalData attachment content, fetched lazily on expand
++      additionalDataMap: {},
+       fields: [
+         {
+           key: 'expandRow',
+@@ -509,6 +525,22 @@
+     });
+   },
+   methods: {
++    // Expand/collapse a row and, on expand, lazily fetch its AdditionalData
++    // attachment so the detail (e.g. failing SYSTEMD_UNIT) is shown inline.
++    async toggleRowDetailsWithData(row) {
++      this.toggleRowDetails(row);
++      if (
++        row.detailsShowing &&
++        row.item.additionalDataUri &&
++        !this.additionalDataMap[row.item.id]
++      ) {
++        const data = await this.$store.dispatch(
++          'eventLog/getEntryAdditionalData',
++          row.item.additionalDataUri,
++        );
++        if (data) this.$set(this.additionalDataMap, row.item.id, data);
++      }
++    },
+     downloadEntry(uri) {
+       let filename = uri?.split('LogServices/')?.[1].concat('.log');
+       filename.replace(RegExp('/', 'g'), '_');

@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000020 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Thu, 05 Jun 2026 00:00:00 +0000
+Subject: [PATCH] fbtp: gate CPU/PCH VR voltage sensors on host power state
+
+The CPU and PCH voltage-regulator rails (MB_VR_CPU*_*, MB_VR_PCH_*) are
+unpowered while the host is off, so psusensor reads ~0 V and trips the
+"Lower Non-critical going low" threshold, flooding the SEL with one
+assertion per rail on every power-down and another on every power-up.
+These are not real faults - the rails are simply off.
+
+Add "PowerState": "On" to each VR pmbus block so psusensor only samples
+and threshold-checks them while the host is powered on.  The hot-swap
+controller (MB_HSC) is left ungated because its input rail is present
+whenever the PSU/PDB is powered.
+
+Upstream-Status: Inappropriate [platform configuration]
+---
+ configurations/fbtp.json | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/configurations/fbtp.json b/configurations/fbtp.json
+index 1111111..2222222 100644
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -996,6 +996,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1045,6 +1046,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1094,6 +1096,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1143,6 +1146,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1232,6 +1236,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1281,6 +1286,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1360,6 +1366,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1409,6 +1416,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {
+@@ -1458,6 +1466,7 @@
+           "Value": 95
+         }
+       ],
++      "PowerState": "On",
+       "Type": "pmbus"
+     },
+     {

@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000005 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Thu, 05 Jun 2026 00:00:00 +0000
+Subject: [PATCH] downgrade DCPowerOn/Off and InvalidLogin events to
+ Informational
+
+AMI's custom event-log hooks create phosphor-logging D-Bus entries with
+a hard-coded Level.Warning for routine, non-fault events:
+
+  * DCPowerOn  - operator powered the host on   (systems.hpp)
+  * DCPowerOff - operator powered the host off  (systems.hpp)
+  * InvalidLoginAttempted:HTTPS - a failed login (pam_authenticate.hpp)
+
+These feed both the Redfish EventLog severity and the AMI
+/redfish/v1/Oem/Ami/Dashboard SeverityCounts, which the WebUI uses to
+compute the overall Health badge.  A normal power cycle or a single
+fat-fingered password therefore drives Health to "caution", which is a
+false alarm.  Note the upstream OpenBMC message registry already
+classifies DCPowerOn as severity "OK"; this only fixes the AMI code
+path that ignored the registry and forced Warning.
+
+Downgrade all three to Level.Informational (maps to Redfish "OK") so
+routine operator activity no longer degrades the Health badge.  The
+journal PRIORITY for the InvalidLogin REDFISH_MESSAGE_ID record is
+lowered to LOG_INFO to match.
+
+Upstream-Status: Inappropriate [single-platform policy]
+---
+ include/pam_authenticate.hpp    | 4 ++--
+ redfish-core/lib/systems.hpp    | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/include/pam_authenticate.hpp b/include/pam_authenticate.hpp
+index 1111111..2222222 100644
+--- a/include/pam_authenticate.hpp
++++ b/include/pam_authenticate.hpp
+@@ -196,7 +196,7 @@
+     {
+         if (serviceWebserver)
+         {
+-            std::string severity = "xyz.openbmc_project.Logging.Entry.Level.Warning";
++            std::string severity = "xyz.openbmc_project.Logging.Entry.Level.Informational";
+             auto bus = sdbusplus::bus::new_default_system();
+             sdbusplus::message::message m = bus.new_method_call("xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+                     "xyz.openbmc_project.Logging.Create", "Create" );
+@@ -215,7 +215,7 @@
+             }
+
+             sd_journal_send("MESSAGE= %s", "Invalid login attempted on HTTPS",
+-                            "PRIORITY=%i", LOG_WARNING, "REDFISH_MESSAGE_ID=%s",
++                            "PRIORITY=%i", LOG_INFO, "REDFISH_MESSAGE_ID=%s",
+                             "OpenBMC.0.1.InvalidLoginAttempted",
+                             "REDFISH_MESSAGE_ARGS=%s", "HTTPS", NULL);
+         }
+diff --git a/redfish-core/lib/systems.hpp b/redfish-core/lib/systems.hpp
+index 3333333..4444444 100644
+--- a/redfish-core/lib/systems.hpp
++++ b/redfish-core/lib/systems.hpp
+@@ -3840,7 +3840,7 @@
+     if ((resetType == "On") || (resetType == "ForceOn"))
+     {
+         // Log DCPowerOn when the host is powered ON
+-        std::string severity = "xyz.openbmc_project.Logging.Entry.Level.Warning";
++        std::string severity = "xyz.openbmc_project.Logging.Entry.Level.Informational";
+         auto bus = sdbusplus::bus::new_default_system();
+         sdbusplus::message::message m = bus.new_method_call("xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+                 "xyz.openbmc_project.Logging.Create", "Create");
+@@ -3870,7 +3870,7 @@
+         if (reqHostState != "xyz.openbmc_project.State.Host.HostState.Running")
+         {
+              // Log DCPowerOff when the host is powered OFF
+-             std::string severity = "xyz.openbmc_project.Logging.Entry.Level.Warning";
++             std::string severity = "xyz.openbmc_project.Logging.Entry.Level.Informational";
+              auto bus = sdbusplus::bus::new_default_system();
+              sdbusplus::message::message m = bus.new_method_call("xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+                        "xyz.openbmc_project.Logging.Create", "Create");

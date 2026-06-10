@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Thu, 05 Jun 2026 00:00:00 +0000
+Subject: [PATCH] make BMC reset audit event meaningful
+
+A Redfish BMC GracefulRestart/ForceRestart logs an audit event via
+alertSystem("Alert:" + resetType).  bmcweb's fillEventLogEntryJson builds
+the Redfish MessageId as "OpenBMC.0.5.0." + Message.substr(0, firstColon),
+so "Alert:GracefulRestart" collapses to the useless "OpenBMC.0.5.0.Alert"
+and the reset type (the only interesting part) is discarded.
+
+Move the meaningful token before the colon: "BMC" + resetType yields
+"OpenBMC.0.5.0.BMCGracefulRestart" / "OpenBMC.0.5.0.BMCForceRestart".
+The event stays Informational (Redfish "OK") - we want BMC reboots
+recorded for audit, just not flagged as a problem.
+
+Upstream-Status: Inappropriate [single-platform policy]
+---
+ redfish-core/lib/managers.hpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/redfish-core/lib/managers.hpp b/redfish-core/lib/managers.hpp
+index 1111111..2222222 100644
+--- a/redfish-core/lib/managers.hpp
++++ b/redfish-core/lib/managers.hpp
+@@ -231,7 +231,7 @@ inline void resetOperation(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+ {
+     if (resetType == "GracefulRestart")
+     {
+-        std::string alertMessageId = "Alert:" + resetType;
++        std::string alertMessageId = "BMC" + resetType;
+         EventServiceManager::getInstance().alertSystem(alertMessageId);
+         BMCWEB_LOG_ERROR("Proceeding with", resetType);
+         doBMCGracefulRestart(asyncResp);
+@@ -239,7 +239,7 @@ inline void resetOperation(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     }
+     if (resetType == "ForceRestart")
+     {
+-        std::string alertMessageId = "Alert:" + resetType;
++        std::string alertMessageId = "BMC" + resetType;
+         EventServiceManager::getInstance().alertSystem(alertMessageId);
+         BMCWEB_LOG_ERROR("Proceeding with", resetType);
+         doBMCForceRestart(asyncResp);
