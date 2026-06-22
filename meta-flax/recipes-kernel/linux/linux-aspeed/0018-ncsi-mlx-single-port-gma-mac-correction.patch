@@ -1,43 +1,48 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Flax <hmccanne@exclamationpoint.com>
-Subject: [PATCH] ncsi: correct Mellanox single-port GMA MAC to base+2
+Subject: [PATCH] ncsi: bump Mellanox MT_ 14.32 single-port GMA MAC to base+2
 
-The Mellanox OEM Get-MAC (GMA) response returns base_mac + (number of host
-ports). On a dual-port ConnectX-4 OCP card that coincidentally lands on the
-dedicated BMC management MAC (base+2), but on a single-port card it returns
-base+1 (the unused second-port slot), leaving the BMC one short of the MAC
-printed on the NIC label / expected by the host BIOS and OEM firmware.
+The Mellanox OEM Get-MAC (GMA) response semantics differ by firmware. The
+MT_ ConnectX-4 firmware (14.32.x) returns base_mac+1 on a single-port card,
+one short of the dedicated BMC management MAC (base+2) printed on the NIC
+label and expected by the host BIOS / OEM firmware. The FB_ firmware
+(e.g. 14.20.x) already returns the correct base+2, so an unconditional
+single-port +1 over-shoots it to base+3.
 
-The kernel applies no correction for Mellanox (unlike the BCM/Intel paths,
-which already eth_addr_inc()). Bump the single-port Mellanox result by one so
-it reaches base+2. The package channel count is fully enumerated by the time
-the config-time GMA response is handled (TiogaPass has no mellanox,multi-host
-DT property, so the probe-time GMA path is not used). This correction flows
-into both dev_set_mac_address() and the perm_addr write added by
-0015-ncsi-set-perm-addr-from-oem-gma, so dev_addr and perm_addr both land on
-base+2. Dual-port and non-Mellanox cards are unaffected.
+Both variants enumerate channel_num == 1 and the GMA carries a single MAC,
+so they cannot be told apart from the GMA response; gate the +1 on the
+per-channel firmware version captured by the GVI handler. fw_version is
+encoded [major:8][minor:8][subminor:16]; 14.32 is 0x0E20 in the top 16
+bits. Only that firmware gets the correction; everything else (FB_ cards,
+dual-port, non-Mellanox) trusts the GMA unchanged.
 
 Signed-off-by: Flax <hmccanne@exclamationpoint.com>
 ---
 --- a/net/ncsi/ncsi-rsp.c
 +++ b/net/ncsi/ncsi-rsp.c
-@@ -649,6 +649,21 @@
+@@ -649,6 +649,27 @@
  	memcpy(saddr.sa_data, &rsp->data[mac_addr_off], ETH_ALEN);
  	if (mfr_id == NCSI_OEM_MFR_BCM_ID || mfr_id == NCSI_OEM_MFR_INTEL_ID)
  		eth_addr_inc((u8 *)saddr.sa_data);
 +
 +	/*
 +	 * Mellanox OEM Get-MAC returns base_mac + (number of host ports): on a
-+	 * dual-port card that lands on the dedicated BMC management MAC
-+	 * (base+2), but on a single-port card it is one short (base+1, which is
-+	 * the unused second-port slot). These ConnectX-4 OCP "Host Management"
-+	 * cards always reserve base+2 as the BMC MAC (per the NIC label / what
-+	 * the host BIOS and OEM firmware expect), so bump the single-port
-+	 * Mellanox result by one to reach base+2. channel_num is fully
-+	 * enumerated by the time the config-time GMA response is handled.
++	 * dual-port ConnectX-4 OCP card that lands on the dedicated BMC
++	 * management MAC (base+2), but on a single-port card it can be one short
++	 * (base+1). These "Host Management" cards reserve base+2 as the BMC MAC,
++	 * so a single-port card may need a +1 bump. The bump is NOT universal,
++	 * though: it is a quirk of the MT_ ConnectX-4 firmware (14.32.x), which
++	 * returns base+1. The FB_ firmware (e.g. 14.20.x) already returns the
++	 * correct base+2 management MAC, so bumping it would over-shoot to
++	 * base+3. Both variants report channel_num == 1 and the GMA response
++	 * carries a single MAC, so the only way to tell them apart is the
++	 * firmware version from the GVI response (stored per channel). The
++	 * fw_version word is encoded [major:8][minor:8][subminor:16]; 14.32 is
++	 * 0x0E20 in the top 16 bits. Restrict the correction to that firmware.
 +	 */
 +	if (mfr_id == NCSI_OEM_MFR_MLX_ID && ndp->active_package &&
-+	    ndp->active_package->channel_num == 1)
++	    ndp->active_package->channel_num == 1 && ndp->active_channel &&
++	    (ndp->active_channel->version.fw_version >> 16) == 0x0E20)
 +		eth_addr_inc((u8 *)saddr.sa_data);
 +
  	if (!is_valid_ether_addr((const u8 *)saddr.sa_data))
