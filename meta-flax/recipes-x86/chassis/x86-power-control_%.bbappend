@@ -3,6 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI += "file://0001-Fix-compile-errors.patch"
 SRC_URI += "file://0002-Fix-PostComplete-GPIO-polarity-in-initialization.patch"
 SRC_URI += "file://0004-reset-os-state-inactive-on-host-power-on.patch"
+SRC_URI += "file://0005-honor-sio-power-good-for-power-off-on-tiogapass.patch"
 
 # TiogaPass: POST_COMPLETE GPIO stays HIGH when BIOS is done (never goes low).
 # Upstream default is ActiveLow, but the Facebook TiogaPass BIOS does not

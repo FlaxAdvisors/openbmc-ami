@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Fri, 26 Jun 2026 00:00:00 +0000
+Subject: [PATCH] Honor SIO power-good de-assert for power-off on TiogaPass
+
+On TiogaPass the GPIO mapped as PS_PWROK (PowerOk) is not wired: it reads 0
+whether the host is on or off and never produces edge events. SIO_POWER_GOOD
+is the live host-power signal (0=off, 1=on). The power-off completion states
+only transitioned to Off on psPowerOKDeAssert, which never fires, so the BMC
+could never observe a power-off: it held POWER_OUT for the full ForceOffPulseMs
+("Power-button override failed. Not sure what to do now.") and reported the
+chassis as On even with the host physically off.
+
+Treat sioPowerGoodDeAssert as equivalent to psPowerOKDeAssert in every off /
+cycle-off / warm-reset-check state (and as unexpected DC loss in the On state).
+This is additive: sioPowerGoodDeAssert was previously consumed by nothing but
+the log-string map, so boards where PS_PWROK works are unaffected.
+
+---
+--- a/src/power_control.cpp	2026-06-26 11:49:47.666420350 +0000
++++ b/src/power_control.cpp	2026-06-26 11:54:22.490414742 +0000
+@@ -1769,6 +1769,9 @@
+     logEvent(__FUNCTION__, event);
+     switch (event)
+     {
++        // TiogaPass: PS_PWROK is not wired; SIO power-good is the live
++        // host-power signal, so treat its de-assert as DC power loss too.
++        case Event::sioPowerGoodDeAssert:
+         case Event::psPowerOKDeAssert:
+             setPowerState(PowerState::off);
+             // DC power is unexpectedly lost, beep
+@@ -1935,6 +1938,10 @@
+     logEvent(__FUNCTION__, event);
+     switch (event)
+     {
++        // TiogaPass: PS_PWROK is dead; SIO power-good de-assert is the real
++        // "host powered down" signal.  Cancelling the assert here also drops
++        // the ForceOffPulseMs hold as soon as the host actually goes down.
++        case Event::sioPowerGoodDeAssert:
+         case Event::psPowerOKDeAssert:
+             // Cancel any GPIO assertions held during the transition
+             gpioAssertTimer.cancel();
+@@ -1951,6 +1958,7 @@
+     logEvent(__FUNCTION__, event);
+     switch (event)
+     {
++        case Event::sioPowerGoodDeAssert:  // TiogaPass: PS_PWROK dead, SIO power-good is live
+         case Event::psPowerOKDeAssert:
+             gracefulPowerOffTimer.cancel();
+             setPowerState(PowerState::off);
+@@ -2024,6 +2032,7 @@
+     logEvent(__FUNCTION__, event);
+     switch (event)
+     {
++        case Event::sioPowerGoodDeAssert:  // TiogaPass: PS_PWROK dead, SIO power-good is live
+         case Event::psPowerOKDeAssert:
+             // Cancel any GPIO assertions held during the transition
+             gpioAssertTimer.cancel();
+@@ -2041,6 +2050,7 @@
+     logEvent(__FUNCTION__, event);
+     switch (event)
+     {
++        case Event::sioPowerGoodDeAssert:  // TiogaPass: PS_PWROK dead, SIO power-good is live
+         case Event::psPowerOKDeAssert:
+             gracefulPowerOffTimer.cancel();
+             setPowerState(PowerState::cycleOff);
+@@ -2082,6 +2092,7 @@
+         case Event::warmResetDetected:
+             setPowerState(PowerState::on);
+             break;
++        case Event::sioPowerGoodDeAssert:  // TiogaPass: PS_PWROK dead, SIO power-good is live
+         case Event::psPowerOKDeAssert:
+             warmResetCheckTimer.cancel();
+             setPowerState(PowerState::off);

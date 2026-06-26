@@ -6,7 +6,7 @@
 # To cut a release build:  set FLAX_RELEASE = "1" in local.conf or on the bitbake command line
 # To bump the version:     change FLAX_VERSION below
 
-FLAX_VERSION = "1.0.6"
+FLAX_VERSION = "1.0.7"
 FLAX_RELEASE ?= "0"
 
 # Anonymous python block runs after version-vars.inc's python() block (which is required by
