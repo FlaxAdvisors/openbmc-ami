@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000022 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Mon, 29 Jun 2026 00:00:00 +0000
+Subject: [PATCH] fbtp: raise fan TACH upper non-critical threshold to 9500 RPM
+
+MB_FAN0/1_TACH upper non-critical was 8500 RPM, but the fans legitimately run
+8500-9000 RPM in normal operation and ramp to ~9200 RPM (failsafe) when the
+host is off and PECI/DTS drops out.  That sits inside the normal range, so the
+"Upper Non-critical going high" event asserted/deasserted constantly, flapping
+the SEL.
+
+Raise the upper non-critical to 9500 RPM - above the observed failsafe maximum
+(9212 RPM) so normal/failsafe operation is quiet, while still warning if a fan
+genuinely overspeeds.  Upper critical (11500 RPM) is left unchanged as the hard
+overspeed alarm.
+
+Upstream-Status: Inappropriate [platform configuration]
+---
+ configurations/fbtp.json | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -188,7 +188,7 @@
+           "Direction": "greater than",
+           "Name": "upper non critical",
+           "Severity": 0,
+-          "Value": 8500
++          "Value": 9500
+         },
+         {
+           "Direction": "greater than",
+@@ -220,7 +220,7 @@
+           "Direction": "greater than",
+           "Name": "upper non critical",
+           "Severity": 0,
+-          "Value": 8500
++          "Value": 9500
+         },
+         {
+           "Direction": "greater than",

@@ -1,0 +1,171 @@
+From: FlaxAdvisors
+Subject: appcommands: FRU-derived manufacturer/product IDs and Flax fw revision
+
+Get Device ID previously reported Manufacturer 343 (Intel), Product 0, and
+Firmware Revision 0.00 on TiogaPass.  Three fixes:
+
+1. Manufacturer ID and Product ID now follow the board vendor.  The same image
+   runs on Wiwynn and Quanta boards, so these must match the FRU.
+   flax-ipmi-devid-manuf.service reads the FRU PRODUCT_MANUFACTURER from D-Bus
+   at boot and caches the matching numeric IDs (decimal) in
+   /var/cache/private/manufID and /var/cache/private/prodID; this handler reads
+   them, keeping D-Bus out of the Get Device ID hot path.  dev_id.json supplies
+   the fallback (Wiwynn) until the cache files appear.
+     Wiwynn -> manuf 40092 (0x9C9C), product 7220  (0x1C34)
+     Quanta -> manuf 40981 (0xA015), product 12614 (0x3146)
+   The old /var/cache/private/prodID reader was hard-capped at 4 characters
+   (std::string id = "0x00"), which truncated 0x1C34/0x3146; it is replaced.
+   Product ID also gains a dev_id.json "prod_id" fallback.
+
+2. Firmware Revision is now derived from the real BMC version.  The os-release
+   string (e.g. "flax-onetree-1.0.7") carries a 3-part semantic version that
+   never matched convertIntelVersion()'s git-style regexes, so the revision was
+   always 0.00.  IPMI Get Device ID has only a 7-bit major field and an 8-bit
+   BCD minor field, so all three components are packed:
+     Firmware Revision major = ((X - 1) << 6) | Y
+     Firmware Revision minor = BCD(Z)
+   e.g. 1.0.7 -> 0x00 / 0x07 ; 2.1.8 -> 0x41 / 0x08.
+   NOTE: (X-1) occupies the top two bits of the 7-bit major field, so major
+   versions >= 3 overflow.  Revisit before shipping a 3.x firmware.
+
+--- a/src/appcommands.cpp
++++ b/src/appcommands.cpp
+@@ -291,6 +291,7 @@
+     static bool devIdInitialized = false;
+     static bool bmcStateInitialized = false;
+     const char* filename = "/usr/share/ipmi-providers/dev_id.json";
++    const char* manufIdFilename = "/var/cache/private/manufID";
+     const char* prodIdFilename = "/var/cache/private/prodID";
+     if (!fwVerInitialized)
+     {
+@@ -298,29 +299,35 @@
+         if (!getActiveSoftwareVersionInfo(ctx, versionPurposeBMC,
+                                           versionString))
+         {
+-            std::optional<MetaRevision> rev =
+-                convertIntelVersion(versionString);
+-            if (rev.has_value())
++            // Flax firmware-revision encoding.  The BMC version embeds a
++            // 3-part semantic version in the os-release string, e.g.
++            // "flax-onetree-1.0.7".  IPMI Get Device ID only exposes a 7-bit
++            // major field plus an 8-bit BCD minor field, so all three
++            // components are packed:
++            //   Firmware Revision major = ((X - 1) << 6) | Y
++            //   Firmware Revision minor = BCD(Z)
++            // e.g. 1.0.7 -> major 0x00 / minor 0x07 ;
++            //      2.1.8 -> major 0x41 / minor 0x08.
++            // NOTE: (X-1) sits in the top two bits of the 7-bit major field
++            // (bit 7 is the device-available flag), so major versions >= 3
++            // overflow.  Revisit the encoding before shipping a 3.x build.
++            std::smatch verMatch;
++            std::regex semver("(\\d+)\\.(\\d+)\\.(\\d+)");
++            if (std::regex_search(versionString, verMatch, semver))
+             {
+-                MetaRevision revision = rev.value();
+-                devId.fwMajor = static_cast<uint7_t>(revision.major);
+-
+-                revision.minor = (revision.minor > 99 ? 99 : revision.minor);
+-                devId.fwMinor = revision.minor % 10 +
+-                                (revision.minor / 10) * 16;
+-                try
+-                {
+-                    uint32_t hash = std::stoul(revision.metaHash, 0, 16);
+-                    hash = bswap_32(hash);
+-                    devId.aux = (revision.buildNo & 0xFF) + (hash & 0xFFFFFF00);
+-                    fwVerInitialized = true;
+-                }
+-                catch (const std::exception& e)
+-                {
+-                    phosphor::logging::log<phosphor::logging::level::ERR>(
+-                        "Failed to convert git hash",
+-                        phosphor::logging::entry("ERROR=%s", e.what()));
+-                }
++                unsigned long x = std::stoul(verMatch[1].str());
++                unsigned long y = std::stoul(verMatch[2].str());
++                unsigned long z = std::stoul(verMatch[3].str());
++                uint8_t major = static_cast<uint8_t>(
++                    (((x ? x - 1 : 0) & 0x03) << 6) | (y & 0x3f));
++                devId.fwMajor = static_cast<uint7_t>(major & 0x7f);
++                z = (z > 99 ? 99 : z);
++                devId.fwMinor = static_cast<uint8_t>(z % 10 + (z / 10) * 16);
++                fwVerInitialized = true;
++                phosphor::logging::log<phosphor::logging::level::INFO>(
++                    "Flax IPMI firmware revision",
++                    phosphor::logging::entry("VERSION=%s",
++                                             versionString.c_str()));
+             }
+         }
+     }
+@@ -337,6 +344,7 @@
+                 devId.revision = data.value("revision", 0);
+                 devId.addnDevSupport = data.value("addn_dev_support", 0);
+                 devId.manufId = data.value("manuf_id", 0);
++                devId.prodId = data.value("prod_id", 0);
+             }
+             else
+             {
+@@ -352,26 +360,48 @@
+             return ipmi::responseUnspecifiedError();
+         }
+ 
+-        // Determine the Product ID. Using the DBus system is painfully slow at
+-        // boot time. Avoid using DBus to get the Product ID. The Product ID is
+-        // stored in a non-volatile file now. The /usr/bin/checkFru.sh script,
+-        // run during bootup, will populate the productIdFile.
+-        std::fstream prodIdFile(prodIdFilename);
+-        if (prodIdFile.is_open())
++        // Manufacturer ID and Product ID must follow the board vendor (Wiwynn
++        // vs Quanta), which differs per FRU.  flax-ipmi-devid-manuf.service
++        // reads the FRU manufacturer from D-Bus at boot and caches the matching
++        // numeric IDs (decimal), keeping D-Bus out of this hot path.  The
++        // dev_id.json values above are the fallback used until those files
++        // appear; while either is absent we re-query on the next Get Device ID
++        // so a late FRU probe is still picked up.
++        bool manufCached = false;
++        bool prodCached = false;
++        std::ifstream manufIdFile(manufIdFilename);
++        if (manufIdFile.is_open())
+         {
+-            std::string id = "0x00";
+-            char* end;
+-            prodIdFile.getline(&id[0], id.size() + 1);
+-            devId.prodId = std::strtol(&id[0], &end, 0);
+-            devIdInitialized = true;
++            std::string id;
++            if (std::getline(manufIdFile, id) && !id.empty())
++            {
++                try
++                {
++                    devId.manufId =
++                        static_cast<uint32_t>(std::stoul(id, nullptr, 0));
++                    manufCached = true;
++                }
++                catch (const std::exception&)
++                {}
++            }
+         }
+-        else
++        std::ifstream prodIdFile(prodIdFilename);
++        if (prodIdFile.is_open())
+         {
+-            // For any exception send out platform id as 0,
+-            // and make sure to re-query the device id.
+-            devIdInitialized = false;
+-            devId.prodId = 0;
++            std::string id;
++            if (std::getline(prodIdFile, id) && !id.empty())
++            {
++                try
++                {
++                    devId.prodId =
++                        static_cast<uint16_t>(std::stoul(id, nullptr, 0));
++                    prodCached = true;
++                }
++                catch (const std::exception&)
++                {}
++            }
+         }
++        devIdInitialized = manufCached && prodCached;
+     }
+ 
+     if (!bmcStateInitialized)

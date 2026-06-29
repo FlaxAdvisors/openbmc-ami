@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000021 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Mon, 29 Jun 2026 00:00:00 +0000
+Subject: [PATCH] fbtp: gate main + INA230 12V rails on host power state
+
+Patch 0020 gated the CPU/PCH VR rails, but the main board rails (MB_P3V3,
+MB_P5V, MB_P12V via ADC) and the connector/hot-swap 12V monitors
+(MB_C2/C3/C4_P12V_INA230, MB_CONN_P12V_INA230) are also fed from the host
+power domain.  When the host powers off they collapse to ~0 and trip the
+"Lower Critical going low" threshold, logging one SEL entry per rail on every
+power-down (and again on power-up).  These are not real faults - the rails are
+simply off with the host.
+
+Add "PowerState": "On" so adcsensor/psusensor only sample and threshold-check
+them while the host is powered.  Standby rails (*_STBY, MB_P3V_BAT) and the
+hot-swap controller input (MB_HSC) are intentionally left ungated because they
+are present whenever the PSU/PDB is powered.
+
+Upstream-Status: Inappropriate [platform configuration]
+---
+ configurations/fbtp.json | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -18,6 +18,7 @@
+           "Value": 2.97
+         }
+       ],
++      "PowerState": "On",
+       "Type": "ADC"
+     },
+     {
+@@ -38,6 +39,7 @@
+           "Value": 4.52
+         }
+       ],
++      "PowerState": "On",
+       "Type": "ADC"
+     },
+     {
+@@ -58,6 +60,7 @@
+           "Value": 10.77
+         }
+       ],
++      "PowerState": "On",
+       "Type": "ADC"
+     },
+     {
+@@ -301,6 +304,7 @@
+           "Value": 75.0
+         }
+       ],
++      "PowerState": "On",
+       "Type": "INA230"
+     },
+     {
+@@ -344,6 +348,7 @@
+           "Value": 75.0
+         }
+       ],
++      "PowerState": "On",
+       "Type": "INA230"
+     },
+     {
+@@ -387,6 +392,7 @@
+           "Value": 75.0
+         }
+       ],
++      "PowerState": "On",
+       "Type": "INA230"
+     },
+     {
+@@ -430,6 +436,7 @@
+           "Value": 250.0
+         }
+       ],
++      "PowerState": "On",
+       "Type": "INA230"
+     },
+     {

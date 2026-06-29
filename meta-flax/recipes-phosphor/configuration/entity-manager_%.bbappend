@@ -16,6 +16,8 @@ SRC_URI:append = " file://0017-Add-tiogapass-configs-to-meson.patch"
 #  0018 - drop nonexistent MEZZ TMP421 sensor + fan PID entry
 #  0019 - convert HSC sensors to native PMBus (+ reindent)
 #  0020 - gate CPU/PCH VR voltage sensors on host PowerState (no SEL spam when host off)
+#  0021 - gate main (P3V3/P5V/P12V ADC) + INA230 12V rails on host PowerState
+#  0022 - raise fan TACH upper non-critical threshold 8500 -> 9500 RPM (quiet flapping)
 # (Board-level Decorator.Ipmi was dropped: entity-manager's global.json schema
 #  sets additionalProperties:false on boards and does not permit Decorator.Ipmi,
 #  so EM strips it. The ipmid SDR CPU storm is fixed by the intel-ipmi-oem
@@ -23,6 +25,8 @@ SRC_URI:append = " file://0017-Add-tiogapass-configs-to-meson.patch"
 SRC_URI:append = " file://0018-fbtp-remove-nonexistent-MEZZ-TMP421-sensor-and-fan-P.patch"
 SRC_URI:append = " file://0019-fbtp-convert-HSC-sensors-to-native-PMBus-reindent.patch"
 SRC_URI:append = " file://0020-fbtp-gate-VR-voltage-sensors-on-host-power-state.patch"
+SRC_URI:append = " file://0021-fbtp-gate-main-and-INA230-rails-on-host-power-state.patch"
+SRC_URI:append = " file://0022-fbtp-raise-fan-tach-upper-noncritical-to-9500.patch"
 
 #RDEPENDS_${PN} += "default-fru"
 
