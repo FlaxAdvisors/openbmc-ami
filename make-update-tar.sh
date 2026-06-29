@@ -5,7 +5,8 @@
 #   ./make-update-tar.sh                          — build BMC update tar
 #   ./make-update-tar.sh bios <bios.bin> [ver]    — build BIOS update tar
 #
-# BMC output:  build/tiogapass/tmp/deploy/images/tiogapass/tiogapass-bmc-update.tar
+# BMC output:  build/tiogapass/tmp/deploy/images/tiogapass/<MANIFEST-version>.tar
+#              (+ stable symlink tiogapass-bmc-update.tar -> that file)
 # BIOS output: build/tiogapass/tmp/deploy/images/tiogapass/tiogapass-bios-update.tar
 #
 # ── BMC upload (simple binary POST) ────────────────────────────────────────
@@ -108,11 +109,18 @@ ExtendedVersion=${VERSION}
 CompatibleName=com.meta.Hardware.BMC.Model.TiogaPass
 EOF
 
-OUTPUT="${DEPLOY_DIR}/tiogapass-bmc-update.tar"
+# Name the tar after the MANIFEST version so the BMC loading script can match
+# the filename to the version inside.  Keep a stable "tiogapass-bmc-update.tar"
+# symlink so existing tooling (/deploy, scp targets, docs) still resolves.
+OUTPUT="${DEPLOY_DIR}/${VERSION}.tar"
 tar -C "$TMPDIR" -cf "$OUTPUT" image-bmc MANIFEST
+
+STABLE="${DEPLOY_DIR}/tiogapass-bmc-update.tar"
+ln -sf "$(basename "$OUTPUT")" "$STABLE"
 
 echo ""
 echo "Done: ${OUTPUT}  ($(du -h "$OUTPUT" | cut -f1))"
+echo "      stable symlink: ${STABLE} -> $(basename "$OUTPUT")"
 echo ""
 echo "Upload via web UI:"
 echo "  https://<bmc-ip>  ->  Settings -> Firmware -> Upload BMC image"
