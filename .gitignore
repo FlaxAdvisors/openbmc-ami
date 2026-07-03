@@ -4,5 +4,10 @@ customrc
 .repo/
 .vscode/
 meta-ami/
+meta-megarac/
+meta-flax/test
 meta-common/
 bitbake-cookerdaemon.log
+
+.claude
+CLAUDE.md

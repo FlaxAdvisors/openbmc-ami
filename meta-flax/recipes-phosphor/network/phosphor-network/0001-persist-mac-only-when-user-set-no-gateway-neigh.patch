@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Fri, 26 Jun 2026 14:40:26 +0000
+Subject: [PATCH] Persist BMC MAC only when user-set; stop pinning discovered
+ gateway
+
+Two related fixes so the BMC stops freezing auto-derived hardware
+addresses into the persistent network config:
+
+1. MAC: writeConfigurationFile() previously wrote [Link]/MACAddress with
+   the running (NC-SI GMA-derived) MAC whenever PERSIST_MAC was enabled,
+   freezing it. On a mezzanine NIC swap that stale MAC was then forced
+   onto the new card. Now a macUserConfigured flag gates the write: the
+   MAC is persisted only when a user explicitly set it via Redfish/IPMI
+   (or when restoring a previously user-set MAC from config at startup).
+   The user-set path (macAddress() setter) is unchanged and still works.
+
+2. Gateway: addDefGw() pinned the discovered default gateway as a
+   permanent static [Neighbor], freezing the gateway MAC. Removed; the
+   [Route]/GatewayOnLink entry still carries routing and the gateway MAC
+   resolves dynamically via ARP/ND.
+---
+ src/ethernet_interface.cpp | 18 +++++++++++++++---
+ src/ethernet_interface.hpp | 10 +++++++++-
+ src/network_manager.cpp    | 19 ++++++-------------
+ 3 files changed, 30 insertions(+), 17 deletions(-)
+
+diff --git a/src/ethernet_interface.cpp b/src/ethernet_interface.cpp
+index d7e25c0..13728a5 100644
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -300,6 +300,9 @@ EthernetInterface::EthernetInterface(
+         system::setNICUp(interfaceName(), false);
+         MacAddressIntf::macAddress(mac, true);
+         manager.get().reconfigLink(ifIdx);
++        // A MAC persisted in the config file is one a user previously set;
++        // remember that so subsequent config writes keep persisting it.
++        macUserConfigured = true;
+     }
+ 
+     signals = initSignals();
+@@ -2136,10 +2139,16 @@ void EthernetInterface::writeConfigurationFile()
+         {
+             auto& link = config.map["Link"].emplace_back();
+ #if PERSIST_MAC
+-            auto mac = MacAddressIntf::macAddress();
+-            if (!mac.empty())
++            // Only persist a user-configured MAC. Never freeze the running
++            // NC-SI-derived MAC into config, so a mezzanine NIC swap yields the
++            // new card's MAC on the next boot instead of forcing the old one.
++            if (macUserConfigured)
+             {
+-                link["MACAddress"].emplace_back(mac);
++                auto mac = MacAddressIntf::macAddress();
++                if (!mac.empty())
++                {
++                    link["MACAddress"].emplace_back(mac);
++                }
+             }
+ #endif
+             if (!EthernetInterfaceIntf::nicEnabled())
+@@ -2375,6 +2384,9 @@ std::string EthernetInterface::macAddress([[maybe_unused]] std::string value)
+                               Argument::ARGUMENT_VALUE(value.c_str()));
+     }
+ 
++    // The user explicitly set the MAC; from now on persist it to config.
++    macUserConfigured = true;
++
+     auto interface = interfaceName();
+     auto validMAC = stdplus::toStr(newMAC);
+ 
+diff --git a/src/ethernet_interface.hpp b/src/ethernet_interface.hpp
+index 660fbe0..21e999b 100644
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -546,7 +546,15 @@ class EthernetInterface : public Ifaces
+     std::mutex vlanMutex;
+ 
+     std::atomic<bool> vlanMonitorActive{true};
+-   
++
++    /** @brief True only when the BMC MAC was explicitly configured by a user
++     *  (Redfish/IPMI), or restored from a user-set value previously persisted
++     *  in the network config. Gates whether writeConfigurationFile() emits the
++     *  [Link]/MACAddress directive, so the running NC-SI-derived MAC is never
++     *  auto-frozen into config (which would otherwise be forced onto a swapped
++     *  mezzanine NIC on the next boot). */
++    bool macUserConfigured = false;
++
+     void startVlanMonitorThread();
+     
+     void monitorVlanInterface();
+diff --git a/src/network_manager.cpp b/src/network_manager.cpp
+index acd2a4e..d5acc45 100644
+--- a/src/network_manager.cpp
++++ b/src/network_manager.cpp
+@@ -623,19 +623,12 @@ void Manager::addDefGw(unsigned ifidx, stdplus::InAnyAddr addr)
+                         it->second->EthernetInterfaceIntf::defaultGateway(
+                             stdplus::toStr(addr));
+                     }
+-                    auto [mac, prefixLength] =
+-                        it->second->getDwMacAddrByIP(stdplus::toStr(addr));
+-                    addNeighbor(NeighborInfo{
+-                        .ifidx = ifidx,
+-                        .state = NUD_PERMANENT,
+-                        .addr = stdplus::fromStr<stdplus::In4Addr>(
+-                            it->second
+-                                ->EthernetInterfaceIntf::defaultGateway()),
+-                        .mac = stdplus::fromStr<stdplus::EtherAddr>(
+-                            mac.value_or("00:00:00:00:00:00")),
+-                        .prefixLength = prefixLength
+-
+-                    });
++                    // Do NOT pin the discovered gateway as a permanent static
++                    // [Neighbor]. Freezing the gateway's MAC into config breaks
++                    // connectivity when the gateway hardware/MAC changes (router
++                    // failover/replacement). Routing is carried by the [Route]
++                    // entry with GatewayOnLink=true; the gateway MAC is resolved
++                    // dynamically via normal ARP/ND, which self-heals.
+                 }
+                 else
+                 {

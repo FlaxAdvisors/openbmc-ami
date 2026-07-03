@@ -20,6 +20,7 @@ SRC_URI += " \
      file://0017-ncsi-quiet-benign-rsp-validation-and-handler-warnings.patch \
      file://0018-ncsi-mlx-single-port-gma-mac-correction.patch \
      file://tiogapass.cfg \
+     file://eth-over-usb.cfg \
      file://openbmc-flash-layout-64-tioga.dtsi \
 "
 
