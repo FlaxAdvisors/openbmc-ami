@@ -18,10 +18,19 @@ set -e
 GADGET="/sys/kernel/config/usb_gadget/eth"
 VHUB="1e6a0000.usb-vhub"
 IFNAME="bmcusb0"           # BMC-side interface name for the gadget
-BMC_IP="10.199.199.1"      # BMC side of the point-to-point link
+BMC_IP="10.199.199.1"      # BMC side of the point-to-point link (in-band tooling)
 PREFIX="30"                # /30 -> host gets 10.199.199.2
 DEV_MAC="02:00:00:aa:bb:01"   # BMC (device) side, locally administered
 HOST_MAC="02:00:00:aa:bb:02"  # host side
+
+# AMI Redfish Host Interface address the TP26 BIOS pushes inventory to.  The
+# BIOS auto-configures a link-local address on its side of the USB link and
+# reaches the BMC's Redfish service at this fixed link-local IP (matching the
+# OEM BMC, which presents its host interface at 169.254.0.17/16).  We add it as
+# a second address on the same gadget so the in-band 10.199.199.x link is
+# preserved for our own tooling.  See docs/redfish-inventory-hi-discovery.md.
+HI_IP="169.254.0.17"       # Redfish Host Interface (BIOS -> BMC inventory push)
+HI_PREFIX="16"             # link-local /16
 
 create_eth() {
     mkdir "${GADGET}"
@@ -86,6 +95,8 @@ assign_ip() {
         for dev in "${IFNAME}" usb0; do
             if ip link show "${dev}" >/dev/null 2>&1; then
                 ip addr add "${BMC_IP}/${PREFIX}" dev "${dev}" 2>/dev/null || true
+                # Redfish Host Interface address the TP26 BIOS pushes to.
+                ip addr add "${HI_IP}/${HI_PREFIX}" dev "${dev}" 2>/dev/null || true
                 ip link set "${dev}" up
                 return 0
             fi
