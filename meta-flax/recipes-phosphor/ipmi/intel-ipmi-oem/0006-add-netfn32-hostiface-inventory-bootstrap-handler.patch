@@ -1,0 +1,193 @@
+From: FlaxAdvisors
+Subject: add NetFn 0x32 host-interface inventory bootstrap handler
+
+TP26 BIOS populates BMC inventory via AMI's Redfish Host Interface: a small
+KCS NetFn 0x32 bootstrap (device-list probe 0x2a, device-status 0x3d, credential
+issue 0x5d, acks 0xaa/0xab) then an authenticated inventory push over the USB
+vNIC.  This adds the native bootstrap handler so POST proceeds and the BIOS is
+issued the host-interface credential.  Response bytes transliterate the
+offline-tested tools/netfn32/netfn32_model.py (ground-truthed from a live OEM
+KCS capture).
+
+diff --git a/meson.build b/meson.build
+index 20a440d4..05cf14cc 100644
+--- a/meson.build
++++ b/meson.build
+@@ -105,6 +105,7 @@ zinteloemcmds_src = [
+   'src/chassiscommands.cpp',
+   'src/allowlist-filter.cpp',
+   'src/fruutils.cpp',
++  'src/hostiface_inventory.cpp',
+   ipmiallowlist,
+ ]
+ 
+diff --git a/src/hostiface_inventory.cpp b/src/hostiface_inventory.cpp
+new file mode 100644
+index 00000000..86df48f6
+--- /dev/null
++++ b/src/hostiface_inventory.cpp
+@@ -0,0 +1,164 @@
++// SPDX-License-Identifier: Apache-2.0
++//
++// Native NetFn 0x32 host-interface inventory bootstrap handler (Flax/TiogaPass).
++//
++// The TP26 BIOS populates BMC inventory over AMI's two-transport Redfish Host
++// Interface: a small KCS NetFn 0x32 bootstrap handshake (this file) followed by
++// an authenticated inventory push over the USB virtual NIC (handled elsewhere).
++// This handler answers the bootstrap so POST proceeds and issues the
++// host-interface credential the BIOS then uses to authenticate its push.
++//
++// Response bytes are a transliteration of tools/netfn32/netfn32_model.py, which
++// is validated byte-for-byte against the live OEM KCS capture
++// (docs/redfish-inventory-netfn32-protocol.md). Keep the two in sync.
++
++#include <ipmid/api.hpp>
++#include <phosphor-logging/log.hpp>
++#include <sys/stat.h>
++
++#include <fstream>
++#include <random>
++#include <string>
++#include <vector>
++
++namespace flax
++{
++namespace hostiface
++{
++
++using phosphor::logging::entry;
++using phosphor::logging::level;
++using phosphor::logging::log;
++
++// NetFn 0x32 — AMI host-interface inventory group.
++static constexpr ipmi::NetFn netFnAmiHostIface = 0x32;
++
++static constexpr ipmi::Cmd cmdSmembers = 0x2a;    // redis passthrough probe
++static constexpr ipmi::Cmd cmdDeviceStatus = 0x3d; // inventory device status
++static constexpr ipmi::Cmd cmdCredential = 0x5d;   // issue HI credential token
++static constexpr ipmi::Cmd cmdAck = 0xaa;          // small ack
++static constexpr ipmi::Cmd cmdVersion = 0xab;      // version/capability probe
++
++// Completion code the OEM returns for `smembers` of an empty set; the BIOS
++// tolerates it and proceeds.
++static constexpr uint8_t ccSmembersEmpty = 0xCC;
++
++// Where the KCS-issued firmware credential is published for the Host Interface
++// endpoint (bmcweb HI-FW account) to consume. Task 1.3 wires the reader.
++static constexpr const char* fwCredPath = "/run/flax-hi-cred";
++
++static std::string generatePassword(size_t length)
++{
++    static constexpr char alphabet[] =
++        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
++    std::random_device rd;
++    std::mt19937 gen(rd());
++    std::uniform_int_distribution<size_t> dist(0, sizeof(alphabet) - 2);
++    std::string out;
++    out.reserve(length);
++    for (size_t i = 0; i < length; ++i)
++    {
++        out.push_back(alphabet[dist(gen)]);
++    }
++    return out;
++}
++
++static void persistFwCredential(const std::string& password)
++{
++    std::ofstream f(fwCredPath, std::ios::out | std::ios::trunc);
++    if (!f)
++    {
++        log<level::ERR>("host-iface: cannot write credential file",
++                        entry("PATH=%s", fwCredPath));
++        return;
++    }
++    f << password << '\n';
++    f.close();
++    // 0600 — only bmcweb (root) reads it.
++    ::chmod(fwCredPath, S_IRUSR | S_IWUSR);
++}
++
++// cmd 0x2a — redis passthrough. The only probe the BIOS issues is
++// `smembers Redfish:oem:MappingOut:DeviceList`; that set is empty on our BMC,
++// so return the empty-set completion code with no data.
++ipmi::RspType<> smembers(std::vector<uint8_t>)
++{
++    return ipmi::response(ccSmembersEmpty);
++}
++
++// cmd 0x3d — inventory device status. Observed req = Param/Set/BlockSelector
++// (01 00 07) -> three 0x07 status bytes.
++ipmi::RspType<std::vector<uint8_t>> deviceStatus(std::vector<uint8_t> req)
++{
++    uint8_t blockSelector = req.size() >= 3 ? req[2] : 0x07;
++    size_t count = (blockSelector == 0x07) ? 3 : blockSelector;
++    return ipmi::responseSuccess(std::vector<uint8_t>(count, 0x07));
++}
++
++// cmd 0x5d — issue a host-interface credential. selector 0x01 = firmware role,
++// 0x02 = OS role; response is [len]"HostAutoFW|OS"[len]<12-char password>.
++ipmi::RspType<std::vector<uint8_t>> credential(std::vector<uint8_t> req)
++{
++    uint8_t selector = req.empty() ? 0x00 : req[0];
++
++    std::string role;
++    if (selector == 0x01)
++    {
++        role = "HostAutoFW";
++    }
++    else if (selector == 0x02)
++    {
++        role = "HostAutoOS";
++    }
++    else
++    {
++        // other selectors (e.g. 0x04) are bare acks
++        return ipmi::responseSuccess(std::vector<uint8_t>{});
++    }
++
++    std::string password = generatePassword(12);
++    if (selector == 0x01)
++    {
++        // The firmware credential is what the BIOS uses to authenticate its
++        // inventory push to the Host Interface endpoint.
++        persistFwCredential(password);
++    }
++
++    std::vector<uint8_t> out;
++    out.reserve(2 + role.size() + password.size());
++    out.push_back(static_cast<uint8_t>(role.size()));
++    out.insert(out.end(), role.begin(), role.end());
++    out.push_back(static_cast<uint8_t>(password.size()));
++    out.insert(out.end(), password.begin(), password.end());
++    return ipmi::responseSuccess(out);
++}
++
++// cmd 0xab — version/capability probe.
++ipmi::RspType<std::vector<uint8_t>> version(std::vector<uint8_t>)
++{
++    return ipmi::responseSuccess(std::vector<uint8_t>{0x01});
++}
++
++// cmd 0xaa — small ack.
++ipmi::RspType<> ack(std::vector<uint8_t>)
++{
++    return ipmi::responseSuccess();
++}
++
++static void registerHostIfaceInventory() __attribute__((constructor));
++static void registerHostIfaceInventory()
++{
++    ipmi::registerHandler(ipmi::prioOemBase, netFnAmiHostIface, cmdSmembers,
++                          ipmi::Privilege::Admin, smembers);
++    ipmi::registerHandler(ipmi::prioOemBase, netFnAmiHostIface, cmdDeviceStatus,
++                          ipmi::Privilege::Admin, deviceStatus);
++    ipmi::registerHandler(ipmi::prioOemBase, netFnAmiHostIface, cmdCredential,
++                          ipmi::Privilege::Admin, credential);
++    ipmi::registerHandler(ipmi::prioOemBase, netFnAmiHostIface, cmdAck,
++                          ipmi::Privilege::Admin, ack);
++    ipmi::registerHandler(ipmi::prioOemBase, netFnAmiHostIface, cmdVersion,
++                          ipmi::Privilege::Admin, version);
++}
++
++} // namespace hostiface
++} // namespace flax
