@@ -54,7 +54,10 @@ def respond(cmd: int, req: bytes) -> tuple:
         role = _HI_ROLE.get(selector)
         if role is not None:
             pw = _generate_password(12)
-            return (CC_OK, bytes([len(role)]) + role + bytes([len(pw)]) + pw)
+            # Byte-exact per the OEM capture: BOTH length prefixes first
+            # ([len role][len pw]), then both strings ([role][pw]).  The BIOS
+            # misparses an interleaved layout and aborts the inventory push.
+            return (CC_OK, bytes([len(role), len(pw)]) + role + pw)
         # other selectors (e.g. 0x04) are bare acks
         return (CC_OK, b"")
 

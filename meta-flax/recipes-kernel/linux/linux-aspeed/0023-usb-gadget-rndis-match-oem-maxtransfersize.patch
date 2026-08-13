@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 10 Aug 2026 22:35:00 +0000
+Subject: [PATCH] usb: gadget: rndis: report the OEM's MaxTransferSize (1600)
+
+With the CDC Ethernet descriptor (0021) and the open TX filter (0022) the TP26
+BIOS brings up its side of the Redfish Host Interface -- it runs RNDIS_MSG_INIT
+during POST and self-assigns 169.254.0.18 -- but the link is one-way.  Probing
+from the BMC throughout POST gives:
+
+    neigh 169.254.0.18 FAILED    pingreply=0     (52 samples)
+
+We receive its ARPs; it never answers ours and never sends a single IP packet.
+The BIOS never completes RNDIS negotiation: it does RESET/INIT/HALT four times,
+never queries an OID and never sets OID_GEN_CURRENT_PACKET_FILTER, so its own
+receive path stays shut and it discards our frames.
+
+Disassembling the OEM gadget's INITIALIZE_CMPLT construction (eth.ko,
+HandleRndisRequest) and comparing field by field, every value matches ours
+except MaxTransferSize: the OEM writes 0x640 (1600), Linux computes
+mtu + ethhdr + rndis_packet_msg_type + 22 = 1580 at the default MTU.
+
+Widen the constant so the reply matches the implementation this BIOS accepts.
+Kept MTU-relative rather than hardcoded.
+
+TESTED ON HARDWARE 2026-08-11: this alone did NOT fix the link -- the RNDIS
+trace was unchanged, the BIOS still did RESET/INIT/HALT x4 and never queried an
+OID.  The actual defects were in the gadget state machine and are fixed by patch
+0024.  This patch is retained only because 1600 is what the OEM reports and
+parity with the implementation this BIOS is known to accept is worth having; it
+is NOT load-bearing, and nothing depends on it.  Drop it freely if it ever gets
+in the way.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/drivers/usb/gadget/function/rndis.c
++++ b/drivers/usb/gadget/function/rndis.c
+@@ -575,11 +575,22 @@
+ 	resp->DeviceFlags = cpu_to_le32(RNDIS_DF_CONNECTIONLESS);
+ 	resp->Medium = cpu_to_le32(RNDIS_MEDIUM_802_3);
+ 	resp->MaxPacketsPerTransfer = cpu_to_le32(1);
++	/*
++	 * Report the same MaxTransferSize as the AMI/MegaRAC gadget that the
++	 * TP26 BIOS accepts: 0x640 (1600).  Upstream's trailing +22 yields 1580
++	 * at the default MTU, and 1580 is the only field in INITIALIZE_CMPLT
++	 * that differs from the OEM's -- MajorVersion, MinorVersion,
++	 * DeviceFlags, Medium, MaxPacketsPerTransfer, PacketAlignmentFactor and
++	 * the AFList fields all match byte for byte.  The BIOS INIT/HALT-loops
++	 * against our reply and never proceeds to query any OID, so widen this
++	 * to match the implementation it does accept.  Kept MTU-relative rather
++	 * than hardcoded so a non-default MTU still scales.
++	 */
+ 	resp->MaxTransferSize = cpu_to_le32(
+ 		  params->dev->mtu
+ 		+ sizeof(struct ethhdr)
+ 		+ sizeof(struct rndis_packet_msg_type)
+-		+ 22);
++		+ 42);
+ 	resp->PacketAlignmentFactor = cpu_to_le32(0);
+ 	resp->AFListOffset = cpu_to_le32(0);
+ 	resp->AFListSize = cpu_to_le32(0);

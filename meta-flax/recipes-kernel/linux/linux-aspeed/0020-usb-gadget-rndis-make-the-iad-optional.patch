@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 10 Aug 2026 20:05:00 +0000
+Subject: [PATCH] usb: gadget: rndis: make the Interface Association Descriptor
+ optional
+
+The TP26 BIOS refuses to bring up our RNDIS gadget as its Redfish Host
+Interface.  With ep0 tracing enabled (patch 0019) its POST-time conversation is:
+
+  GET_DESCRIPTOR DEVICE (8), DEVICE (18), CONFIG (255)
+  SET_CONFIGURATION 1
+  GET_DESCRIPTOR CONFIG (9), CONFIG (75), STRING 0/1/2/3
+  GET_DESCRIPTOR CONFIG (75)   x2      <-- re-reads it and gives up
+  ...26.8 s of silence, then suspend
+
+It never sends SEND_ENCAPSULATED_COMMAND (req21.00 / RNDIS_MSG_INIT), which
+Linux sends on the very same device 40 s later.  So the descriptors are fine
+for a normal RNDIS host but the BIOS parses the configuration and rejects it.
+
+Disassembling the OEM MegaRAC gadget module that this BIOS *does* accept
+(lib/modules/generic/misc/eth.ko, CreateEthernetDescriptor) shows it builds the
+same CDC-ACM style function -- header/ACM/union/call-management functional
+descriptors and a 0xFF protocol -- but emits **no IAD**: there is not a single
+type-0x0B descriptor in the module.  Stock f_rndis always emits one, so we
+present a 75-byte configuration beginning with an IAD and a bDeviceClass of
+0xEF (Miscellaneous / Interface Association).
+
+Allow the IAD to be suppressed.  It is the first element of each
+eth_*_function[] array, so omitting it is just starting one element later.
+Default is unchanged (IAD emitted); pair `iad=00` with bDeviceClass=0x02,
+bDeviceSubClass=0x00, bDeviceProtocol=0x00 on the gadget to present a plain
+non-composite CDC device.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/drivers/usb/gadget/function/u_rndis.h
++++ b/drivers/usb/gadget/function/u_rndis.h
+@@ -32,6 +32,16 @@
+ 	u8				protocol;
+ 
+ 	/*
++	 * Emit the Interface Association Descriptor (default 1 = yes, the
++	 * historical behaviour).  Set to 0 to present the function as a plain
++	 * non-composite CDC device: some UEFI RNDIS drivers do not expect a
++	 * type-0x0B descriptor while walking the configuration and reject the
++	 * device.  The IAD is the first entry of each eth_*_function[] array,
++	 * so omitting it is just a matter of starting one element later.
++	 */
++	u8				iad;
++
++	/*
+ 	 * Read/write access to configfs attributes is handled by configfs.
+ 	 *
+ 	 * This is to protect the data from concurrent access by read/write
+--- a/drivers/usb/gadget/function/f_rndis.c
++++ b/drivers/usb/gadget/function/f_rndis.c
+@@ -660,6 +660,7 @@
+ 	struct usb_string	*us;
+ 	int			status;
+ 	struct usb_ep		*ep;
++	int			iad_skip;
+ 
+ 	struct f_rndis_opts *rndis_opts;
+ 
+@@ -775,8 +776,16 @@
+ 	ss_out_desc.bEndpointAddress = fs_out_desc.bEndpointAddress;
+ 	ss_notify_desc.bEndpointAddress = fs_notify_desc.bEndpointAddress;
+ 
+-	status = usb_assign_descriptors(f, eth_fs_function, eth_hs_function,
+-			eth_ss_function, eth_ss_function);
++	/*
++	 * The IAD is the first element of each array; skipping it presents the
++	 * function as a plain non-composite CDC device (see u_rndis.h).  Pair
++	 * with bDeviceClass=0x02/0x00/0x00 on the gadget when disabling it.
++	 */
++	iad_skip = rndis_opts->iad ? 0 : 1;
++
++	status = usb_assign_descriptors(f, eth_fs_function + iad_skip,
++			eth_hs_function + iad_skip, eth_ss_function + iad_skip,
++			eth_ss_function + iad_skip);
+ 	if (status)
+ 		goto fail;
+ 
+@@ -863,6 +872,12 @@
+ /* f_rndis_opts_protocol */
+ USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, protocol);
+ 
++/* f_rndis_opts_iad -- 01 = emit the IAD (default), 00 = omit it.
++ * NB: like the attributes above this parses with sscanf("%02hhx"), so write
++ * bare two-digit hex ("00"/"01"); "0x00" would silently store 0.
++ */
++USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, iad);
++
+ static struct configfs_attribute *rndis_attrs[] = {
+ 	&rndis_opts_attr_dev_addr,
+ 	&rndis_opts_attr_host_addr,
+@@ -871,6 +886,7 @@
+ 	&rndis_opts_attr_class,
+ 	&rndis_opts_attr_subclass,
+ 	&rndis_opts_attr_protocol,
++	&rndis_opts_attr_iad,
+ 	NULL,
+ };
+ 
+@@ -921,6 +937,7 @@
+ 	opts->class = rndis_iad_descriptor.bFunctionClass;
+ 	opts->subclass = rndis_iad_descriptor.bFunctionSubClass;
+ 	opts->protocol = rndis_iad_descriptor.bFunctionProtocol;
++	opts->iad = 1;
+ 
+ 	descs[0] = &opts->rndis_os_desc;
+ 	names[0] = "rndis";

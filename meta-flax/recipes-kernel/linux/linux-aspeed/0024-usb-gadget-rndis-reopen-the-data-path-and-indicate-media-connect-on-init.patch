@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Tue, 11 Aug 2026 13:50:00 +0000
+Subject: [PATCH] usb: gadget: rndis: reopen the data path and indicate media
+ connect on INIT
+
+The TP26 BIOS's UEFI RNDIS driver never sends OID_GEN_CURRENT_PACKET_FILTER.
+In stock f_rndis/rndis that single OID is the only thing that (a) starts the
+data path and (b) tells the driver the link is up, so the Redfish Host
+Interface never comes alive during POST.  Patch 0022 dealt with the outgoing
+cdc_filter; this patch deals with the two remaining consequences, both of which
+were confirmed on hardware with dynamic_debug on the whole gadget stack.
+
+1. netif carrier / TX queue
+
+   rndis_msg_parser() handles RNDIS_MSG_HALT with
+
+	params->state = RNDIS_UNINITIALIZED;
+	if (params->dev) {
+		netif_carrier_off(params->dev);
+		netif_stop_queue(params->dev);
+	}
+
+   and the only code that ever undoes it is the
+   RNDIS_OID_GEN_CURRENT_PACKET_FILTER case in gen_ndis_set_resp().  The BIOS
+   does RESET/INIT/HALT/INIT twice and then stops, so the gadget is left
+   INITIALIZED but with the carrier down and the queue stopped for the whole of
+   POST.  Measured over a full POST:
+
+	usb0 carrier=0 operstate=down    (313.99s .. 471.8s uptime)
+	RX 22 packets (the BIOS's ARPs)  TX 6 packets
+
+   With the carrier down, linkwatch_do_dev() calls dev_deactivate(), so the ARP
+   replies the BIOS is waiting for are dropped before they ever reach
+   eth_start_xmit().  The carrier only came up at 471.8s, when the host OS
+   booted and its rndis_host driver set the packet filter.
+
+   INIT is the point at which the endpoints are usable again, so re-enable the
+   netdev there rather than waiting for an OID that this host never sends.
+
+2. RNDIS_STATUS_MEDIA_CONNECT
+
+   rndis_indicate_status_msg() returns -ENOTSUPP while the state is
+   RNDIS_UNINITIALIZED, and f_rndis emits its only rndis_signal_connect() from
+   rndis_open(), which gether_connect() calls at SET_CONFIGURATION -- i.e.
+   strictly before the host's INIT.  The one media-connect indication is
+   therefore generated exactly when it is guaranteed to be discarded, and none
+   is ever generated afterwards.  A host that waits for a link-up indication
+   before querying anything sees silence, which is what the trace shows: after
+   the final INIT_CMPLT the BIOS sends nothing at all for the remaining 138 s
+   of POST.
+
+   Emit the indication once the state machine is initialized and the medium is
+   connected.  It is queued after the INIT_CMPLT, and f_rndis's notify_count
+   logic already resends RESPONSE_AVAILABLE until the queue drains, so the host
+   collects the two responses in order.
+
+Linux and Windows hosts are unaffected: they set the packet filter as before
+(which re-runs netif_carrier_on()) and their RNDIS drivers ignore a redundant
+INDICATE_STATUS.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+
+3. stale responses across a HALT
+
+   RNDIS_MSG_HALT did not drain the response queue (RNDIS_MSG_RESET does).
+   That is latent upstream, where nothing is ever queued unsolicited, but the
+   indication added by (2) makes it reachable: the BIOS reads INIT_CMPLT and
+   HALTs without collecting the trailing indication, so the next session's
+   GET_ENCAPSULATED_RESPONSE is served the stale 20-byte indication where its
+   52-byte INIT_CMPLT should be.  Confirmed on hardware -- the ep0 trace showed
+   the BIOS reading l52 then l20 after every second INIT.  Drain on HALT too.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/drivers/usb/gadget/function/rndis.c
++++ b/drivers/usb/gadget/function/rndis.c
+@@ -821,13 +821,49 @@
+ 
+ 	/* For USB: responses may take up to 10 seconds */
+ 	switch (MsgType) {
+-	case RNDIS_MSG_INIT:
++	case RNDIS_MSG_INIT: {
++		int retval;
++
+ 		pr_debug("%s: RNDIS_MSG_INIT\n",
+ 			__func__);
+ 		params->state = RNDIS_INITIALIZED;
+-		return rndis_init_response(params, (rndis_init_msg_type *)buf);
++		retval = rndis_init_response(params,
++					     (rndis_init_msg_type *)buf);
++		if (retval < 0)
++			return retval;
++
++		/*
++		 * A preceding RNDIS_MSG_HALT took the carrier down and stopped
++		 * the queue, and only RNDIS_OID_GEN_CURRENT_PACKET_FILTER puts
++		 * them back.  The TP26 UEFI RNDIS driver never sends that OID,
++		 * so bring the netdev back up here -- the endpoints are usable
++		 * again as of INIT.  Companion to the cdc_filter default in
++		 * f_rndis.c.
++		 */
++		if (params->dev) {
++			netif_carrier_on(params->dev);
++			if (netif_running(params->dev))
++				netif_wake_queue(params->dev);
++		}
++
++		/*
++		 * f_rndis signals connect from rndis_open(), which runs at
++		 * SET_CONFIGURATION -- before this INIT -- so that indication
++		 * is dropped by the RNDIS_UNINITIALIZED check in
++		 * rndis_indicate_status_msg().  Re-announce it now that the
++		 * state machine can carry it, for hosts that wait for link-up
++		 * before they query anything.
++		 */
++		if (params->media_state == RNDIS_MEDIA_STATE_CONNECTED)
++			rndis_indicate_status_msg(params,
++						  RNDIS_STATUS_MEDIA_CONNECT);
++		return 0;
++	}
++
++	case RNDIS_MSG_HALT: {
++		u8 *xbuf;
++		u32 xlen;
+ 
+-	case RNDIS_MSG_HALT:
+ 		pr_debug("%s: RNDIS_MSG_HALT\n",
+ 			__func__);
+ 		params->state = RNDIS_UNINITIALIZED;
+@@ -835,7 +871,22 @@
+ 			netif_carrier_off(params->dev);
+ 			netif_stop_queue(params->dev);
+ 		}
++
++		/*
++		 * Drain the response queue, exactly as RNDIS_MSG_RESET does.
++		 * HALT ends the session, so anything still queued belongs to
++		 * the old one; leaving it there makes the *next* session read
++		 * a stale response as the reply to its first command.  That is
++		 * latent upstream (nothing is queued unsolicited), but the
++		 * media-connect indication added above makes it reachable: the
++		 * host reads INIT_CMPLT, HALTs without collecting the trailing
++		 * indication, and the following INIT_CMPLT is then served one
++		 * response too late.  Observed on the TP26 BIOS.
++		 */
++		while ((xbuf = rndis_get_next_response(params, &xlen)))
++			rndis_free_response(params, xbuf);
+ 		return 0;
++	}
+ 
+ 	case RNDIS_MSG_QUERY:
+ 		return rndis_query_response(params,

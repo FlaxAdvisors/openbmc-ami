@@ -88,13 +88,13 @@
     }
   },
   "8" : {
-    "name" : "INTRABMC",
+    "name" : "eth0",
     "is_valid" : true,
     "active_sessions" : 0,
     "channel_info" : {
-      "medium_type" : "oem",
-      "protocol_type" : "oem",
-      "session_supported" : "session-less",
+      "medium_type" : "lan-802.3",
+      "protocol_type" : "ipmb-1.0",
+      "session_supported" : "multi-session",
       "is_ipmi" : true
     }
   },

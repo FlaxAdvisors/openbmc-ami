@@ -23,10 +23,10 @@ index 20a440d4..05cf14cc 100644
  
 diff --git a/src/hostiface_inventory.cpp b/src/hostiface_inventory.cpp
 new file mode 100644
-index 00000000..86df48f6
+index 00000000..ddf91666
 --- /dev/null
 +++ b/src/hostiface_inventory.cpp
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,200 @@
 +// SPDX-License-Identifier: Apache-2.0
 +//
 +// Native NetFn 0x32 host-interface inventory bootstrap handler (Flax/TiogaPass).
@@ -42,9 +42,11 @@ index 00000000..86df48f6
 +// (docs/redfish-inventory-netfn32-protocol.md). Keep the two in sync.
 +
 +#include <ipmid/api.hpp>
++#include <ipmid/filter.hpp>
 +#include <phosphor-logging/log.hpp>
 +#include <sys/stat.h>
 +
++#include <cstdio>
 +#include <fstream>
 +#include <random>
 +#include <string>
@@ -153,11 +155,16 @@ index 00000000..86df48f6
 +        persistFwCredential(password);
 +    }
 +
++    // Byte-exact per the OEM capture: BOTH length prefixes first
++    // ([len role][len pw]), THEN both strings ([role][pw]).  The BIOS
++    // misparses the credential if the lengths are interleaved with the
++    // strings, and then aborts the host-interface push (it stops after two
++    // 0x5d requests instead of issuing the third + pushing inventory).
 +    std::vector<uint8_t> out;
 +    out.reserve(2 + role.size() + password.size());
 +    out.push_back(static_cast<uint8_t>(role.size()));
-+    out.insert(out.end(), role.begin(), role.end());
 +    out.push_back(static_cast<uint8_t>(password.size()));
++    out.insert(out.end(), role.begin(), role.end());
 +    out.insert(out.end(), password.begin(), password.end());
 +    return ipmi::responseSuccess(out);
 +}
@@ -187,6 +194,35 @@ index 00000000..86df48f6
 +                          ipmi::Privilege::Admin, ack);
 +    ipmi::registerHandler(ipmi::prioOemBase, netFnAmiHostIface, cmdVersion,
 +                          ipmi::Privilege::Admin, version);
++
++    // Diagnostic (Task 1.4): trace EVERY request the host issues over the KCS
++    // system interface (channel 0x0F), not just NetFn 0x32.  The OEM golden
++    // trace (kcs-bytes-fullpush.txt) shows the BIOS enumerating the BMC's LAN
++    // channels (Get Channel Info 0x06/0x42, Get LAN Config 0x0c/0x02) in the
++    // very window in which it decides to push, so the divergence that stops
++    // the push may lie outside NetFn 0x32 entirely.
++    // Pass-through (ccSuccess): logs only, never alters a response.
++    ipmi::registerFilter(
++        ipmi::prioOpenBmcBase,
++        [](ipmi::message::Request::ptr request) -> ipmi::Cc {
++            if (request->ctx->channel == 0x0F)
++            {
++                std::string hex;
++                for (uint8_t b : request->payload.raw)
++                {
++                    char buf[4];
++                    std::snprintf(buf, sizeof(buf), "%02x ", b);
++                    hex += buf;
++                }
++                log<level::INFO>(
++                    "HI32-trace",
++                    entry("NETFN=0x%X", static_cast<int>(request->ctx->netFn)),
++                    entry("CMD=0x%X", static_cast<int>(request->ctx->cmd)),
++                    entry("LEN=%zu", request->payload.raw.size()),
++                    entry("DATA=%s", hex.c_str()));
++            }
++            return ipmi::ccSuccess;
++        });
 +}
 +
 +} // namespace hostiface

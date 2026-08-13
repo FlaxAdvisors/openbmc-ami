@@ -1,5 +1,5 @@
 [Unit]
-Description=Create the HI-FW Redfish Host Interface firmware account
+Description=Create the Redfish Host Interface firmware accounts
 Wants=xyz.openbmc_project.User.Manager.service
 After=xyz.openbmc_project.User.Manager.service
 Before=bmcweb.service

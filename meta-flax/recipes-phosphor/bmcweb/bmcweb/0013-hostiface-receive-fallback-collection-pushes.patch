@@ -1,0 +1,247 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Thu, 13 Aug 2026 17:30:00 +0000
+Subject: [PATCH] hostiface: receive the BIOS fallback collection pushes
+
+With GET /redfish/v1/Oem/Ami/InventoryData answered 405, the TP26 BIOS falls
+back to generic Redfish and writes inventory into the standard collections
+(captured 2026-08-13 with -Dbmcweb-logging=debug):
+
+    DELETE/POST /redfish/v1/Systems/system/Memory
+    DELETE/POST /redfish/v1/Systems/system/Processors
+    DELETE      /redfish/v1/Chassis/Cpld/PCIeDevices
+    POST        /redfish/v1/Chassis/Cpld/PCIeDevices/<id>
+
+Upstream owns the Systems paths for GET only, so all of these returned 405/404
+and the payloads were discarded -- the BIOS printed "Posting memory collection"
+while nothing reached a handler of ours.
+
+Take the fallback deliberately: it is the only path proven to leave the host
+bootable.  Serving the OEM GET is the one known way to make it unbootable, and
+three attempts to reconstruct that response body (add Systems/Chassis; drop the
+Redfish boilerplate; emit the full seven-member manifest) each crashed the BIOS
+at an identical RIP.  The OEM body is 3105 bytes and our best reference is 852,
+so further attempts are guesswork.  See
+/vagrant/oem-reference/protocol-reverse/FINDINGS-2026-08-13-real-inventory-endpoints.md
+
+Members accumulate as numbered files under
+/var/lib/flax-inventory/collections/<group>/ and DELETE clears the group,
+matching the BIOS clear-then-post cycle.  PCIe members keep their URL id.
+
+Chassis/<id>/PCIeDevices is not registered upstream (upstream has
+Systems/<id>/PCIeDevices), so that path is ours.
+
+All receivers reuse the host-interface gate from 0012 (peer in 169.254.0.0/16
+AND HostAutoFW/HI-FW, else 403), the 2 MB cap and write-then-rename.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -478,6 +478,139 @@
+     asyncResp->res.result(boost::beast::http::status::ok);
+ }
+ 
++// ---------------------------------------------------------------------------
++// Collection receivers (the BIOS's FALLBACK push path).
++//
++// When we answer GET /Oem/Ami/InventoryData with 405, the BIOS does not use the
++// AMI OEM single-POST protocol.  It falls back to generic Redfish and writes
++// inventory straight into the standard collections, captured 2026-08-13:
++//
++//   Clearing memory collection  -> DELETE /redfish/v1/Systems/system/Memory
++//   Posting memory collection   -> POST   /redfish/v1/Systems/system/Memory
++//   Clearing CPU collection     -> DELETE /redfish/v1/Systems/system/Processors
++//   Posting CPU collection      -> POST   /redfish/v1/Systems/system/Processors
++//   Clearing PCIe collection    -> DELETE /redfish/v1/Chassis/Cpld/PCIeDevices
++//   Posting PCIe collection     -> POST   /redfish/v1/Chassis/Cpld/PCIeDevices/<id>
++//
++// Upstream bmcweb owns the Systems paths for GET only, so all of these returned
++// 405/404 and the payloads were dropped on the floor.  We take the fallback
++// deliberately: it is the one path proven to leave the host bootable.  Serving
++// the OEM GET is the only known way to make it unbootable, and three attempts
++// to reconstruct that response body all crashed the BIOS -- see
++// /vagrant/oem-reference/protocol-reverse/FINDINGS-2026-08-13-real-inventory-endpoints.md
++//
++// Each POST is one collection MEMBER, so they accumulate as numbered files;
++// DELETE clears the group first, which is exactly the BIOS's clear-then-post
++// cycle.
++constexpr const char* flaxInvDirRoot = "/var/lib/flax-inventory";
++
++inline std::string flaxCollectionDir(const std::string& group)
++{
++    return std::string(flaxInvDirRoot) + "/collections/" + group;
++}
++
++inline void handleFlaxCollectionDelete(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& group)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    if (!flaxIsHostInterfaceClient(req))
++    {
++        messages::insufficientPrivilege(asyncResp->res);
++        return;
++    }
++
++    std::error_code ec;
++    const std::string dir = flaxCollectionDir(group);
++    std::uintmax_t removed = std::filesystem::remove_all(dir, ec);
++    BMCWEB_LOG_ERROR("flax-hi: CLEAR {} ({} entries)", group, removed);
++    asyncResp->res.result(boost::beast::http::status::no_content);
++}
++
++inline void handleFlaxCollectionPost(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& group, const std::string& memberId)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++    if (!flaxIsHostInterfaceClient(req))
++    {
++        messages::insufficientPrivilege(asyncResp->res);
++        return;
++    }
++    if (req.body().size() > flaxMaxUploadBytes)
++    {
++        BMCWEB_LOG_ERROR("flax-hi: rejecting {} byte {} member",
++                         req.body().size(), group);
++        asyncResp->res.result(boost::beast::http::status::payload_too_large);
++        return;
++    }
++
++    std::error_code ec;
++    const std::string dir = flaxCollectionDir(group);
++    std::filesystem::create_directories(dir, ec);
++
++    // Name the file after the member id the BIOS gave us where there is one
++    // (PCIe sends /PCIeDevices/00_01_00); otherwise number them in arrival
++    // order, which is how Memory and Processors arrive.
++    std::string name;
++    if (!memberId.empty())
++    {
++        name = flaxSafeName(memberId, "member");
++    }
++    else
++    {
++        size_t n = 0;
++        for (const auto& e : std::filesystem::directory_iterator(dir, ec))
++        {
++            (void)e;
++            ++n;
++        }
++        name = std::to_string(n);
++    }
++    name += ".json";
++
++    const std::string finalPath = dir + "/" + name;
++    const std::string tmpPath = finalPath + ".tmp";
++    {
++        std::ofstream out(tmpPath, std::ofstream::out | std::ofstream::binary |
++                                       std::ofstream::trunc);
++        if (!out)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: cannot open {} for write", tmpPath);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        out << req.body();
++        out.flush();
++        if (!out)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: short write to {}", tmpPath);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++    }
++    std::filesystem::rename(tmpPath, finalPath, ec);
++    if (ec)
++    {
++        BMCWEB_LOG_ERROR("flax-hi: rename {} failed: {}", tmpPath,
++                         ec.message());
++        messages::internalError(asyncResp->res);
++        return;
++    }
++
++    BMCWEB_LOG_ERROR("flax-hi: COLLECT {}/{} ({} bytes)", group, name,
++                     req.body().size());
++    asyncResp->res.result(boost::beast::http::status::created);
++}
++
+ inline void requestRoutesFlaxHostInterface(App& app)
+ {
+     // The BIOS posts the bulk blob to the TOP-LEVEL /redfish/v1/BiosStaticFiles
+@@ -537,6 +670,66 @@
+         .privileges(redfish::privileges::postUpdateService)
+         .methods(boost::beast::http::verb::patch)(
+             std::bind_front(handleFlaxInventoryPatch, std::ref(app)));
++
++    // ---- fallback collection receivers -------------------------------------
++    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Memory/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post,
++                 boost::beast::http::verb::delete_)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& /*systemName*/) {
++                if (req.method() == boost::beast::http::verb::delete_)
++                {
++                    handleFlaxCollectionDelete(app, req, asyncResp, "memory");
++                    return;
++                }
++                handleFlaxCollectionPost(app, req, asyncResp, "memory", "");
++            });
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Processors/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post,
++                 boost::beast::http::verb::delete_)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& /*systemName*/) {
++                if (req.method() == boost::beast::http::verb::delete_)
++                {
++                    handleFlaxCollectionDelete(app, req, asyncResp,
++                                               "processors");
++                    return;
++                }
++                handleFlaxCollectionPost(app, req, asyncResp, "processors", "");
++            });
++
++    // Chassis/<id>/PCIeDevices is not registered by upstream at all (upstream
++    // has Systems/<id>/PCIeDevices), so this path is ours to take.
++    BMCWEB_ROUTE(app, "/redfish/v1/Chassis/<str>/PCIeDevices/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post,
++                 boost::beast::http::verb::delete_)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& /*chassisId*/) {
++                if (req.method() == boost::beast::http::verb::delete_)
++                {
++                    handleFlaxCollectionDelete(app, req, asyncResp, "pcie");
++                    return;
++                }
++                handleFlaxCollectionPost(app, req, asyncResp, "pcie", "");
++            });
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Chassis/<str>/PCIeDevices/<str>/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post,
++                 boost::beast::http::verb::put)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& /*chassisId*/,
++                   const std::string& deviceId) {
++                handleFlaxCollectionPost(app, req, asyncResp, "pcie", deviceId);
++            });
+ }
+ 
+ } // namespace redfish

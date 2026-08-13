@@ -22,18 +22,21 @@ def test_0x3d_device_status_block7():
 
 
 def test_0x5d_fw_credential_structure():
-    # req[0]=0x01 -> Host-Interface firmware credential:
-    # cc=0 + [len]"HostAutoFW" + [len]<12-char generated password>.
+    # req[0]=0x01 -> Host-Interface firmware credential.  Byte-exact OEM layout
+    # (kcs-bytes-fullpush.txt): cc=0 + [len role=0x0A][len pw=0x0C] then both
+    # strings "HostAutoFW" + <12-char generated password>.  The lengths come
+    # first, NOT interleaved with the strings.
     cc, data = respond(0x5d, bytes([0x01]))
     assert cc == 0x00
-    assert data[0] == 0x0A and data[1:11] == b"HostAutoFW"
-    assert data[11] == 0x0C and len(data[12:]) == 12
-    assert data[12:].isalnum()
+    assert data[0] == 0x0A and data[1] == 0x0C
+    assert data[2:12] == b"HostAutoFW"
+    assert len(data[12:]) == 12 and data[12:].isalnum()
 
 
 def test_0x5d_os_credential_role():
     cc, data = respond(0x5d, bytes([0x02]))
-    assert cc == 0x00 and data[1:11] == b"HostAutoOS" and data[11] == 0x0C
+    assert cc == 0x00 and data[0] == 0x0A and data[1] == 0x0C
+    assert data[2:12] == b"HostAutoOS" and len(data[12:]) == 12
 
 
 def test_0x5d_selector4_is_bare_ack():

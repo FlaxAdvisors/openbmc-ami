@@ -1,5 +1,12 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
+# ── TEMPORARY DIAGNOSTIC — REMOVE BEFORE SHIPPING ────────────────────────────
+# Capture the TP26 BIOS's real host-interface request URLs and status codes, to
+# find where it POSTs its memory/CPU/PCIe collections (they currently reach no
+# route we serve).  Very verbose; do not leave enabled in a release image.
+EXTRA_OEMESON:append:tiogapass = " -Dbmcweb-logging=debug"
+# ─────────────────────────────────────────────────────────────────────────────
+
 SRC_URI:append:tiogapass = " \
     file://0001-redfish-browser-logo-nav-and-caching.patch \
     file://0002-fix-httpPushUriBusy-reacquisition.patch \
@@ -8,4 +15,8 @@ SRC_URI:append:tiogapass = " \
     file://0005-downgrade-power-and-login-events-to-informational.patch \
     file://0006-make-bmc-reset-audit-event-meaningful.patch \
     file://0007-flax-host-interface-inventory-receive-endpoint.patch \
+    file://0008-serviceroot-ami-host-interface-compat.patch \
+    file://0009-hostiface-correct-biosstaticfiles-path-and-inventorydata-get.patch \
+    file://0012-hostiface-oem-inventorydata-get-and-hi-only-gate.patch \
+    file://0013-hostiface-receive-fallback-collection-pushes.patch \
 "

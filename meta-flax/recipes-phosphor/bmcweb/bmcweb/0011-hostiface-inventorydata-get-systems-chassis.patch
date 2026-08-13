@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Wed, 12 Aug 2026 22:10:00 +0000
+Subject: [PATCH] hostiface: return Systems and Chassis from the InventoryData
+ GET
+
+The TP26 BIOS's RfInventory driver dies with a #GP while pushing inventory:
+
+    Configuring firmware is in progress...
+    Pushing firmware layout to OData server.
+    !!!! X64 Exception Type - 0D(#GP - General Protection) !!!!
+    RAX - 0, RCX - 0
+    ...\p26c\14203m\...\RfInventory\DEBUG\RfInventory.pdb
+
+Reproduced on two different BIOS chips (both TPC_P26C) and across BMC images,
+so the BIOS is not the variable.  RAX and RCX both zero at the fault is the
+shape of a null dereference.
+
+The BIOS reads GET /redfish/v1/Oem/Ami/InventoryData before deciding what to
+push.  The OEM BMC answers that with three top-level members; we answered with
+one:
+
+    OEM   GroupCrcList + Systems[] + Chassis[]        (3105 B per its access log)
+    ours  GroupCrcList only, plus odata boilerplate   (237 B measured live)
+
+Systems[] and Chassis[] carry Manufacturer / SerialNumber / SKU / BiosVersion /
+UUID / Status, and for Systems also TrustedModules.  If RfInventory indexes
+Systems[0] or Chassis[0] when it composes the "firmware layout" it is about to
+push, a response without them nulls out exactly there.
+
+Populate both, mirroring the OEM's captured body
+(/vagrant/oem-reference/protocol-reverse/inventory.json).
+
+NOTE ON THE VALUES: these are static placeholders of the correct SHAPE.  The
+point of this change is to establish whether the missing members are what kills
+RfInventory.  If it is, the follow-up is to source these from D-Bus -- Systems
+fields from xyz.openbmc_project.Inventory / the SMBIOS MDR data, UUID from
+xyz.openbmc_project.Common.UUID, chassis fields from the baseboard FRU -- rather
+than hardcoding them here.  Do not ship the hardcoded form.
+
+Caveat recorded for the next reader: the GET happens ~43 s and nine POSTs before
+the fault, so the BIOS demonstrably parses this response and continues.  This
+change only explains the crash if the BIOS retains something from it and
+dereferences it later.  The competing candidate is our response to
+POST /redfish/v1/Systems/<id>/Bios, which is the request immediately preceding
+the fault; if this patch does not fix it, look there next.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -277,6 +277,59 @@
+     asyncResp->res.jsonValue["Name"] = "Inventory Data";
+     BMCWEB_LOG_ERROR(
+         "flax-hi: GET InventoryData (zero CRCs -> ask for a full push)");
++
++    // The OEM answers this GET with Systems[] and Chassis[] alongside the CRC
++    // table; we previously sent neither.  See the commit message -- these are
++    // shape-correct placeholders pending real D-Bus sourcing.
++    {
++        nlohmann::json::object_t sysStatus;
++        sysStatus["State"] = "Enabled";
++        sysStatus["Health"] = "OK";
++        sysStatus["HealthRollup"] = "OK";
++
++        nlohmann::json::object_t tpmStatus;
++        tpmStatus["State"] = "Enabled";
++
++        nlohmann::json::object_t tpm;
++        tpm["FirmwareVersion"] = "7.62";
++        tpm["FirmwareVersion2"] = "12.13824";
++        tpm["InterfaceType"] = "TPM2_0";
++        tpm["InterfaceTypeSelection"] = "BiosSetting";
++        tpm["Status"] = tpmStatus;
++
++        nlohmann::json::array_t trustedModules;
++        trustedModules.emplace_back(std::move(tpm));
++
++        nlohmann::json::object_t system;
++        system["Manufacturer"] = "Quanta";
++        system["SerialNumber"] = "Default string";
++        system["SKU"] = "Default string";
++        system["BiosVersion"] = "TPC_P26C";
++        system["UUID"] = "00000000-0000-0000-0000-000000000000";
++        system["Status"] = sysStatus;
++        system["TrustedModules"] = std::move(trustedModules);
++
++        nlohmann::json::array_t systems;
++        systems.emplace_back(std::move(system));
++        asyncResp->res.jsonValue["Systems"] = std::move(systems);
++
++        nlohmann::json::object_t chasStatus;
++        chasStatus["State"] = "Enabled";
++        chasStatus["Health"] = "OK";
++        chasStatus["HealthRollup"] = "OK";
++
++        nlohmann::json::object_t chassis;
++        chassis["Manufacturer"] = "Quanta";
++        chassis["SerialNumber"] = "Default string";
++        chassis["SKU"] = "Default string";
++        chassis["ChassisType"] = "RackMount";
++        chassis["Status"] = chasStatus;
++
++        nlohmann::json::array_t chassisList;
++        chassisList.emplace_back(std::move(chassis));
++        asyncResp->res.jsonValue["Chassis"] = std::move(chassisList);
++    }
++
+     nlohmann::json::object_t groupCrcList;
+     groupCrcList["CPU"] = 0;
+     groupCrcList["DIMM"] = 0;

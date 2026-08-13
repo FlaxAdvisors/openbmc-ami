@@ -19,6 +19,12 @@ SRC_URI += " \
      file://0016-ipv6-regen-link-local-on-mac-change.patch \
      file://0017-ncsi-quiet-benign-rsp-validation-and-handler-warnings.patch \
      file://0018-ncsi-mlx-single-port-gma-mac-correction.patch \
+     file://0019-usb-gadget-composite-trace-every-ep0-setup-packet.patch \
+     file://0020-usb-gadget-rndis-make-the-iad-optional.patch \
+     file://0021-usb-gadget-rndis-emit-cdc-ethernet-functional-descriptor.patch \
+     file://0022-usb-gadget-rndis-open-the-tx-filter-by-default.patch \
+     file://0023-usb-gadget-rndis-match-oem-maxtransfersize.patch \
+     file://0024-usb-gadget-rndis-reopen-the-data-path-and-indicate-media-connect-on-init.patch \
      file://tiogapass.cfg \
      file://eth-over-usb.cfg \
      file://openbmc-flash-layout-64-tioga.dtsi \
