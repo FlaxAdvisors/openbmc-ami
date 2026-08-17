@@ -20,6 +20,9 @@ SRC_URI:append = " file://0017-Add-tiogapass-configs-to-meson.patch"
 #  0022 - raise fan TACH upper non-critical threshold 8500 -> 9500 RPM (quiet flapping)
 #  0023 - add 2C stepwise hysteresis; idle fans oscillated 35%<->70% because
 #         MB_INLET_REMOTE_TEMP dithers on the 40C step boundary with no hysteresis
+#  0024 - shift the inlet fan curve +10C: that sensor is not an inlet sensor, it
+#         reads 11-16C above ambient (and above the OUTLET), so the curve hit its
+#         70% step at ordinary room temperature
 # (Board-level Decorator.Ipmi was dropped: entity-manager's global.json schema
 #  sets additionalProperties:false on boards and does not permit Decorator.Ipmi,
 #  so EM strips it. The ipmid SDR CPU storm is fixed by the intel-ipmi-oem
@@ -30,6 +33,7 @@ SRC_URI:append = " file://0020-fbtp-gate-VR-voltage-sensors-on-host-power-state.
 SRC_URI:append = " file://0021-fbtp-gate-main-and-INA230-rails-on-host-power-state.patch"
 SRC_URI:append = " file://0022-fbtp-raise-fan-tach-upper-noncritical-to-9500.patch"
 SRC_URI:append = " file://0023-fbtp-add-stepwise-hysteresis-to-stop-fan-oscillation.patch"
+SRC_URI:append = " file://0024-fbtp-shift-inlet-fan-curve-10c.patch"
 
 #RDEPENDS_${PN} += "default-fru"
 
