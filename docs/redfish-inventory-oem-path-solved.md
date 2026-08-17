@@ -181,21 +181,74 @@ Two implementation consequences:
 - Advertising a CRC we cannot honour would be worse than advertising none: the
   BIOS would skip a group we do not actually hold.
 
-## Implementation sketch, now that guessing is over
+## Implemented (bmcweb patch 0015, commit 195c9031dc)
 
-1. Serve `GET /Oem/Ami/InventoryData`: **404 while we hold no inventory**
-   (matches the OEM in the empty state, and is what today's working boot
-   already effectively does), otherwise the captured structure with our stored
-   values.
-2. Accept the `POST`, persist the payload, and implement `PostStatus` as a
-   real state machine: `Ready` → `In-Progress` → `Completed`, with
-   `ProcessingTime` and a `Messages` map.
-3. Store `GroupCrcList` from the payload and echo it back. Advertise
-   `BiosStaticFiles` CRCs so the BIOS stops re-uploading all seven assets.
-4. Keep the peer-subnet gate; answer 404 (not 403/405) off-interface, as the
-   OEM does.
+The GET now returns the captured document shape, and the POST normalizes an
+OEM push into the collection layout `flax-hi-inventory` already reads. The
+per-item schemas are byte-identical between the OEM payload and the
+generic-Redfish fallback, so the translator needed **no changes at all** — its
+51 offline checks still pass untouched.
 
-Acceptance before the BIOS ever sees it: diff our generated body against
-`hi-InventoryData.json` — same keys, same nesting, same types; only CRCs,
-etag/LastModified and MACs may differ. Keep the current 405 kill switch
-staged, since that behaviour is proven to boot.
+What the handler does:
+
+- **Opt-in, inverted.** Absent `/var/lib/flax-inventory/enable-inventorydata-get`
+  it answers 405, the behaviour proven to boot. The old flag was a *disable*
+  file that had to be present to be safe, which meant an rwfs erase silently
+  re-armed the crashing path — a live landmine on the shipped image.
+- **`BiosStaticFiles`** carries a real CRC-32 per stored asset, so the BIOS
+  uploads only what changed instead of all seven files every boot.
+- **`GroupCrcList`** is read back from `groupcrc.json`, written verbatim from
+  the BIOS's own push. Zeros while we hold nothing, which reads as stale for
+  every group and asks for a full push.
+- **`SecureBoot` omitted; `DRE` and `NetworkDeviceFunctions` present but empty**
+  — see the divergences above.
+- **The normalizer merges per group**, never wholesale, so an 850-byte
+  no-change delta cannot erase the inventory.
+
+### Verified offline, with no host boot
+
+Hot-deployed, enabled with the LAN debug flag, and diffed against
+`hi-InventoryData.json` (`ours-inventorydata-2026-08-17.json` is the result):
+
+| check | outcome |
+|---|---|
+| top-level keys | all 9 of the OEM's, minus the deliberate `SecureBoot`; nothing extra |
+| `System` sub-keys | identical minus `SecureBoot` |
+| `GroupCrcList` shape | `[{"CPU":n},{"PCIE":n},{"DIMM":n}]`, matching |
+| `BiosStaticFiles` CRCs | **6 of 7 byte-identical to the OEM's own values** |
+
+That six-way CRC match is the strongest evidence available without a host boot:
+it confirms the CRC-32 variant independently, using files we already held. The
+seventh, `SetupData.xml`, differs because our stored copy genuinely differs —
+the mechanism working as intended.
+
+### How to enable it (and how to get back)
+
+```bash
+# arm it, then power-cycle the host
+touch /var/lib/flax-inventory/enable-inventorydata-get
+# recover: one ssh command + a host power cycle, no reflash
+rm -f /var/lib/flax-inventory/enable-inventorydata-get
+```
+
+`allow-lan-inventorydata-get` additionally exposes the GET to the management
+LAN for diffing. It is a debug affordance — remove it after testing.
+
+Two things to know before arming it:
+
+- A **hot-deployed** bmcweb does not survive a BMC reboot (`/usr` is not
+  persistent), so a real test wants the image flashed first.
+- The first armed boot is the risky one. It is also the one that yields
+  everything: PCIe, Storage and NetworkAdapters in a single push.
+
+### Still open
+
+`PostStatus` is not implemented. The OEM runs a `Ready → In-Progress →
+Completed` state machine with `ProcessingTime` and a `Messages` map, but it is
+never an HTTP endpoint — the BIOS never GETs it, and those redis reads were the
+OEM BMC talking to itself. It may matter only for the OEM's own UI. Left out
+until evidence says the BIOS cares.
+
+Publishing PCIe/Storage/NetworkAdapters to D-Bus is also still to do: the
+receiver will write `collections/pcie/*.json`, but the translator maps only
+DIMMs and CPUs today.
