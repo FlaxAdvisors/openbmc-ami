@@ -140,6 +140,47 @@ which is the mechanism by which the BIOS decides a group needs re-pushing.
 That is the entire CLAUDE.md inventory wish list — PCIe, Storage and
 FabricAdapters included — in a single request we currently refuse.
 
+## Second boot: the delta path (`boot2-delta/`)
+
+The box was rebooted with nothing changed, so the BIOS recomputed its CRCs and
+found all three matching what the BMC advertises. Result:
+
+```
+GET  Redfish:InventoryData:PostStatus:Status      <- BIOS polls
+HGETALL Redfish:oem:ami:inventory:crc:GroupCrcList   } BMC assembling
+HGETALL Redfish:BiosStaticFiles:Crc                  } the GET body
+GET  Redfish:Oem:Ami:InventoryData:LastModified      }
+   ... ~21 s later, the BIOS posts anyway ...
+SET  PostStatus:Status "Ready" -> "In-Progress" -> "Completed"
+SET  PostStatus:ProcessingTime "320.00"           <- vs 23040.49 on a full push
+HSET crc:GroupCrcList CPU/PCIE/DIMM               <- same three values re-asserted
+```
+
+**Zero** Memory, Processor or PCIe writes hit redis this boot (1106 PCIe and 292
+memory lines on the full push, 0 and 0 here), and the static assets were not
+re-uploaded — only the CRC map was read. The push itself shrank from 108 KB to
+**850 bytes**, and processing from 23 s to 320 ms.
+
+`delta-push.json` is that 850-byte body: `GroupCrcList` plus static identity
+only — Manufacturer, SerialNumber, SKU, BiosVersion, UUID, Status,
+TrustedModules for Systems, and Manufacturer/SerialNumber/SKU/ChassisType for
+Chassis. The three heavy groups are simply absent.
+
+This confirms the CRC advertisement is what buys the steady state: matching
+CRCs mean the BIOS skips both the inventory groups and the seven static assets.
+Our current 191-byte stub advertises nothing, which is why our BMC eats a full
+re-push on every single boot.
+
+Two implementation consequences:
+
+- **The delta payload overwrote `/var/tmp/hi_inventory_files/inventory.json`**
+  (108689 -> 850 bytes) while redis kept the full inventory — 25 PCIe devices
+  and 266 memory keys still present. The last received payload is therefore NOT
+  the inventory; the store is. Any receiver must merge per group, never replace
+  wholesale, or a no-change boot would erase everything.
+- Advertising a CRC we cannot honour would be worse than advertising none: the
+  BIOS would skip a group we do not actually hold.
+
 ## Implementation sketch, now that guessing is over
 
 1. Serve `GET /Oem/Ami/InventoryData`: **404 while we hold no inventory**
