@@ -25,6 +25,19 @@ Stakes: three attempts to reconstruct this body by guesswork all crashed the
 BIOS at a constant `RIP 674D113B`, making the host unbootable until reverted.
 This capture is what replaces guessing.
 
+## Scripts
+
+The two phases are scripted so the chip-swap window is spent capturing, not
+typing.  Both are POSIX sh for the OEM's busybox (no bash, no curl), and every
+step is non-fatal so a missing tool cannot cost the rest of the capture:
+
+- `tools/oem-capture/capture-phase-a.sh` — at rest, no host boot
+- `tools/oem-capture/capture-phase-b.sh start|stop` — around a host boot
+
+Each tars its output to `/tmp/oemcap.tar` / `/tmp/oemcap-b.tar` for a single
+scp back.  The steps below are what those scripts do, kept here so the capture
+can also be driven by hand if a box detail differs.
+
 ## Access
 
 ```bash
