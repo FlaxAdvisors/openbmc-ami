@@ -460,6 +460,205 @@ std::optional<Object> mapCpu(const nlohmann::json& j, unsigned fallbackIndex)
     return obj;
 }
 
+std::string sanitizeId(const std::string& raw, const std::string& fallback)
+{
+    std::string out;
+    for (char c : raw)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_')
+        {
+            out.push_back(c);
+        }
+        else if (c == '-' || c == '.' || c == ' ' || c == '/')
+        {
+            out.push_back('_');
+        }
+    }
+    return out.empty() ? fallback : out;
+}
+
+std::optional<Object> mapPcieDevice(const nlohmann::json& j,
+                                    const std::string& fallbackId)
+{
+    if (!j.is_object())
+    {
+        return std::nullopt;
+    }
+
+    std::string id = fallbackId;
+    if (auto v = getString(j, "Id"))
+    {
+        id = *v;
+    }
+
+    Object obj;
+    obj.path = std::string(pciePrefix) + sanitizeId(id, fallbackId);
+
+    Properties dev;
+
+    /* The BIOS nests the functions under Links.PCIeFunctions; bmcweb wants
+     * them flattened onto the device as Function<N><Field>, all strings. */
+    const nlohmann::json* links = getObject(j, "Links");
+    if (links != nullptr)
+    {
+        auto fns = links->find("PCIeFunctions");
+        if (fns != links->end() && fns->is_array())
+        {
+            constexpr unsigned maxFunctions = 8; // bmcweb scans 0..7
+            unsigned n = 0;
+            for (const auto& fn : *fns)
+            {
+                if (!fn.is_object() || n >= maxFunctions)
+                {
+                    break;
+                }
+                const std::string p = "Function" + std::to_string(n);
+                /* DeviceId is the existence marker bmcweb keys on: without it
+                 * the function is not rendered at all, so a record that lacks
+                 * one contributes nothing and is skipped. */
+                auto deviceId = getString(fn, "DeviceId");
+                if (!deviceId)
+                {
+                    continue;
+                }
+                dev[p + "DeviceId"] = *deviceId;
+                for (const auto& [src, dst] :
+                     {std::pair<const char*, const char*>{"VendorId",
+                                                          "VendorId"},
+                      {"ClassCode", "ClassCode"},
+                      {"RevisionId", "RevisionId"},
+                      {"SubsystemId", "SubsystemId"},
+                      {"SubsystemVendorId", "SubsystemVendorId"},
+                      {"DeviceClass", "DeviceClass"},
+                      {"FunctionType", "FunctionType"}})
+                {
+                    if (auto v = getString(fn, src))
+                    {
+                        dev[p + dst] = *v;
+                    }
+                }
+                ++n;
+            }
+        }
+    }
+
+    if (auto v = getString(j, "DeviceType"))
+    {
+        dev["DeviceType"] = *v;
+    }
+    obj.interfaces[ifacePcieDevice] = std::move(dev);
+
+    /* Manufacturer here is the BIOS's concatenated vendor+device id
+     * ("8086F1A8"), not a vendor name, so it is deliberately NOT published as
+     * Decorator.Asset.Manufacturer -- the per-function VendorId carries that
+     * information properly. */
+    Properties item;
+    item["Present"] = statusPresent(j);
+    if (auto v = getString(j, "Description"))
+    {
+        item["PrettyName"] = *v; // e.g. "8086 MASS Slot 3"
+    }
+    obj.interfaces[ifaceItem] = std::move(item);
+    obj.interfaces[ifaceOperationalStatus] = {
+        {"Functional", statusFunctional(j)}};
+
+    return obj;
+}
+
+std::optional<Object> mapDrive(const nlohmann::json& j,
+                               const std::string& fallbackId)
+{
+    if (!j.is_object())
+    {
+        return std::nullopt;
+    }
+
+    std::string id = fallbackId;
+    if (auto v = getString(j, "Id"))
+    {
+        id = *v;
+    }
+
+    Object obj;
+    obj.path = std::string(drivePrefix) + sanitizeId(id, fallbackId);
+
+    Properties drive;
+    auto capacity = j.find("CapacityBytes");
+    if (capacity != j.end() && capacity->is_number_unsigned())
+    {
+        drive["Capacity"] = capacity->get<uint64_t>();
+    }
+    if (auto v = getString(j, "Protocol"))
+    {
+        /* Enum members: SAS, SATA, NVMe, FC, eMMC, Unknown. */
+        static const std::map<std::string, std::string> protocols = {
+            {"NVMe", "NVMe"}, {"SATA", "SATA"}, {"SAS", "SAS"},
+            {"FC", "FC"},     {"eMMC", "eMMC"},
+        };
+        auto it = protocols.find(*v);
+        drive["Protocol"] = std::string(ifaceDrive) + ".DriveProtocol." +
+                            (it == protocols.end() ? "Unknown" : it->second);
+    }
+    if (auto v = getString(j, "MediaType"))
+    {
+        /* Enum members: HDD, SSD, Unknown. */
+        const bool known = (*v == "SSD" || *v == "HDD");
+        drive["Type"] = std::string(ifaceDrive) + ".DriveType." +
+                        (known ? *v : "Unknown");
+    }
+    if (!drive.empty())
+    {
+        obj.interfaces[ifaceDrive] = std::move(drive);
+    }
+
+    Properties asset;
+    if (auto v = getString(j, "Model"))
+    {
+        asset["Model"] = *v;
+    }
+    if (auto v = getString(j, "SerialNumber"))
+    {
+        asset["SerialNumber"] = *v;
+    }
+    if (auto v = getString(j, "PartNumber"))
+    {
+        asset["PartNumber"] = *v;
+    }
+    /* The BIOS writes "N/A" where it has no vendor string; publishing that
+     * verbatim would put "N/A" in front of a customer. */
+    if (auto v = getString(j, "Manufacturer"))
+    {
+        if (*v != "N/A" && *v != "Not Available")
+        {
+            asset["Manufacturer"] = *v;
+        }
+    }
+    if (!asset.empty())
+    {
+        obj.interfaces[ifaceAsset] = std::move(asset);
+    }
+
+    Properties item;
+    item["Present"] = statusPresent(j);
+    if (auto v = getString(j, "Model"))
+    {
+        item["PrettyName"] = *v;
+    }
+    obj.interfaces[ifaceItem] = std::move(item);
+
+    /* FailurePredicted is the drive's own SMART verdict; fold it into
+     * Functional so a dying drive shows as degraded rather than healthy. */
+    bool functional = statusFunctional(j);
+    auto failing = j.find("FailurePredicted");
+    if (failing != j.end() && failing->is_boolean() && failing->get<bool>())
+    {
+        functional = false;
+    }
+    obj.interfaces[ifaceOperationalStatus] = {{"Functional", functional}};
+
+    return obj;
+}
+
 Object absentObject(const std::string& path)
 {
     Object obj;

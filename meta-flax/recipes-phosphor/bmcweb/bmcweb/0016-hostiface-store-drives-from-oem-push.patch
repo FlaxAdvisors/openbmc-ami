@@ -1,0 +1,61 @@
+From: Flax Advisors <support@flaxadvisors.com>
+Date: Sun, 17 Aug 2026 00:00:00 +0000
+Subject: [PATCH] hostiface: store drives from the OEM push
+
+The push carries Systems[0].Storage[] -- one entry per storage subsystem --
+with the drives nested inside each, one level deeper than Memory or Processors.
+The normalizer walked past them, so nothing on the BMC ever saw the NVMe.
+
+Flatten them into a single "drives" group.  Drive ids are unique across
+subsystems (NVMe_Device0_NSID1), so the flattening cannot collide, and the
+group goes through the same merge-not-replace path as the rest: a no-change
+delta omits Storage entirely and must leave what we hold alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+Upstream-Status: Inappropriate [platform integration]
+---
+ redfish-core/lib/flax_host_interface.hpp | 27 ++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/redfish-core/lib/flax_host_interface.hpp b/redfish-core/lib/flax_host_interface.hpp
+index 2f1b861..5883ca9 100644
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -382,6 +382,33 @@ inline void flaxNormalizeOemInventory()
+                    nullptr);
+         writeGroup("processors",
+                    sys.value("Processors", nlohmann::json::array()), nullptr);
++
++        // Drives are nested one level deeper than everything else: the payload
++        // carries Systems[0].Storage[] -- one entry per storage subsystem --
++        // and the drives hang off each of those.  Flatten them into a single
++        // group; a drive id is unique across subsystems (NVMe_Device0_NSID1).
++        nlohmann::json drives = nlohmann::json::array();
++        const auto& storage = sys.value("Storage", nlohmann::json::array());
++        if (storage.is_array())
++        {
++            for (const auto& subsystem : storage)
++            {
++                if (!subsystem.is_object())
++                {
++                    continue;
++                }
++                const auto& list =
++                    subsystem.value("Drives", nlohmann::json::array());
++                if (list.is_array())
++                {
++                    for (const auto& drive : list)
++                    {
++                        drives.push_back(drive);
++                    }
++                }
++            }
++        }
++        writeGroup("drives", drives, "Id");
+     }
+ 
+     const auto& chassisList = payload["Chassis"];
+-- 
+2.34.1
+

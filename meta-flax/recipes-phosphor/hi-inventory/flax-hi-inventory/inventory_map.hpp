@@ -66,6 +66,18 @@ inline constexpr const char* ifaceLocationCode =
     "xyz.openbmc_project.Inventory.Decorator.LocationCode";
 inline constexpr const char* ifaceOperationalStatus =
     "xyz.openbmc_project.State.Decorator.OperationalStatus";
+inline constexpr const char* ifacePcieDevice =
+    "xyz.openbmc_project.Inventory.Item.PCIeDevice";
+inline constexpr const char* ifaceDrive =
+    "xyz.openbmc_project.Inventory.Item.Drive";
+
+/* PCIe devices and drives hang off the same motherboard path as everything
+ * else; bmcweb finds them by interface anywhere under the inventory root and
+ * takes the Redfish id from the path leaf. */
+inline constexpr const char* pciePrefix =
+    "/system/chassis/motherboard/pcie_";
+inline constexpr const char* drivePrefix =
+    "/system/chassis/motherboard/drive_";
 
 /** @brief DIMM slot index from an SMBIOS device locator.
  *
@@ -86,6 +98,24 @@ std::optional<Object> mapDimm(const nlohmann::json& j, unsigned fallbackIndex);
 
 /** @brief Map one processors collection member. */
 std::optional<Object> mapCpu(const nlohmann::json& j, unsigned fallbackIndex);
+
+/** @brief Map one PCIe device (only reachable via the OEM push -- the
+ *         generic-Redfish fallback delivers a single stripped record).
+ *
+ *  bmcweb flattens PCIe functions onto the device object as
+ *  Function<N>VendorId / DeviceId / ClassCode / ... , all strings, so a device
+ *  with several functions is still one D-Bus object.  Eight is the ceiling
+ *  bmcweb scans and the interface defines.
+ */
+std::optional<Object> mapPcieDevice(const nlohmann::json& j,
+                                    const std::string& fallbackId);
+
+/** @brief Map one drive out of the payload's Storage[].Drives[]. */
+std::optional<Object> mapDrive(const nlohmann::json& j,
+                               const std::string& fallbackId);
+
+/** @brief Sanitise an id into something usable as a D-Bus path element. */
+std::string sanitizeId(const std::string& raw, const std::string& fallback);
 
 /** @brief An object marked not-present, for a part that vanished between
  *         pushes.  Redfish renders this as Status.State: Absent. */

@@ -279,6 +279,38 @@ int main()
         ++index;
     }
 
+    /* PCIe and drives only ever arrive via the OEM push; on the generic
+     * fallback these directories hold at most one stripped record. */
+    std::set<std::string> pciePaths;
+    for (const auto& file : groupFiles("pcie"))
+    {
+        auto j = readJson(file);
+        if (!j)
+        {
+            continue;
+        }
+        if (auto obj = mapPcieDevice(*j, file.stem().string()))
+        {
+            pciePaths.insert(obj->path);
+            objects.push_back(std::move(*obj));
+        }
+    }
+
+    std::set<std::string> drivePaths;
+    for (const auto& file : groupFiles("drives"))
+    {
+        auto j = readJson(file);
+        if (!j)
+        {
+            continue;
+        }
+        if (auto obj = mapDrive(*j, file.stem().string()))
+        {
+            drivePaths.insert(obj->path);
+            objects.push_back(std::move(*obj));
+        }
+    }
+
     if (objects.empty())
     {
         /* Nothing pushed yet.  Not an error -- the host may never have booted
@@ -292,6 +324,8 @@ int main()
 
     addAbsentObjects(bus, ifaceDimm, dimmPrefix, memoryPaths, objects);
     addAbsentObjects(bus, ifaceCpu, cpuPrefix, cpuPaths, objects);
+    addAbsentObjects(bus, ifacePcieDevice, pciePrefix, pciePaths, objects);
+    addAbsentObjects(bus, ifaceDrive, drivePrefix, drivePaths, objects);
 
     std::vector<DeferredProperty> deferred;
     const auto payload = splitPayload(objects, deferred);
@@ -306,8 +340,9 @@ int main()
 
     fprintf(stderr,
             "flax-hi-inventory: published %zu DIMM(s), %zu CPU(s), "
-            "%zu deferred propert%s\n",
-            memoryPaths.size(), cpuPaths.size(), deferred.size(),
+            "%zu PCIe device(s), %zu drive(s), %zu deferred propert%s\n",
+            memoryPaths.size(), cpuPaths.size(), pciePaths.size(),
+            drivePaths.size(), deferred.size(),
             deferred.size() == 1 ? "y" : "ies");
     return 0;
 }

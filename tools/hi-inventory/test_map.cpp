@@ -234,6 +234,106 @@ int main(int argc, char** argv)
     check(cpu1 && cpu1->path == "/system/chassis/motherboard/cpu1",
           "socket 1 -> cpu1");
 
+    /* ---- PCIe -------------------------------------------------------------
+     * 00_01_00 is the Intel 660p NVMe in slot 3, the one device the fallback
+     * path also delivered -- but there it arrived with the function detail
+     * stripped to a bare link.  Via the OEM push it carries full config-space
+     * identity, which is the whole point of this route. */
+    const auto nvme = mapPcieDevice(load(samples + "/pcie/00_01_00.json"),
+                                    "fallback");
+    check(nvme.has_value(), "pcie/00_01_00.json maps");
+    if (nvme)
+    {
+        check(nvme->path == "/system/chassis/motherboard/pcie_00_01_00",
+              "pcie path, got " + nvme->path);
+        expectProp(*nvme, ifacePcieDevice, "Function0DeviceId",
+                   std::string("0xF1A8"));
+        expectProp(*nvme, ifacePcieDevice, "Function0VendorId",
+                   std::string("0x8086"));
+        expectProp(*nvme, ifacePcieDevice, "Function0ClassCode",
+                   std::string("0x010802"));
+        expectProp(*nvme, ifacePcieDevice, "Function0RevisionId",
+                   std::string("0x03"));
+        expectProp(*nvme, ifacePcieDevice, "Function0SubsystemId",
+                   std::string("0x390D"));
+        expectProp(*nvme, ifacePcieDevice, "Function0SubsystemVendorId",
+                   std::string("0x8086"));
+        expectProp(*nvme, ifacePcieDevice, "Function0DeviceClass",
+                   std::string("MassStorageController"));
+        expectProp(*nvme, ifaceItem, "Present", true);
+        /* Manufacturer is "8086F1A8" here -- a vendor+device id, not a vendor
+         * name -- so it must NOT be published as an Asset manufacturer. */
+        check(nvme->interfaces.find(ifaceAsset) == nvme->interfaces.end(),
+              "no bogus Asset.Manufacturer on a PCIe device");
+    }
+
+    /* A multi-function device must flatten onto ONE object, numbered from 0. */
+    {
+        nlohmann::json multi = nlohmann::json::object();
+        multi["Id"] = "00_00_1F";
+        nlohmann::json fns = nlohmann::json::array();
+        for (const char* dev : {"0xA1C1", "0xA1A1", "0xA123"})
+        {
+            nlohmann::json f = nlohmann::json::object();
+            f["DeviceId"] = dev;
+            f["VendorId"] = "0x8086";
+            fns.push_back(f);
+        }
+        multi["Links"]["PCIeFunctions"] = fns;
+        const auto obj = mapPcieDevice(multi, "x");
+        check(obj.has_value(), "multi-function device maps");
+        if (obj)
+        {
+            expectProp(*obj, ifacePcieDevice, "Function0DeviceId",
+                       std::string("0xA1C1"));
+            expectProp(*obj, ifacePcieDevice, "Function2DeviceId",
+                       std::string("0xA123"));
+            check(obj->interfaces.at(ifacePcieDevice).count("Function3DeviceId")
+                      == 0,
+                  "no phantom Function3");
+        }
+    }
+
+    /* ---- Drives ----------------------------------------------------------- */
+    const auto drive =
+        mapDrive(load(samples + "/drives/NVMe_Device0_NSID1.json"), "fallback");
+    check(drive.has_value(), "drive maps");
+    if (drive)
+    {
+        check(drive->path ==
+                  "/system/chassis/motherboard/drive_NVMe_Device0_NSID1",
+              "drive path, got " + drive->path);
+        expectProp(*drive, ifaceDrive, "Capacity", uint64_t{512110190592ULL});
+        expectProp(*drive, ifaceDrive, "Protocol",
+                   std::string("xyz.openbmc_project.Inventory.Item.Drive."
+                               "DriveProtocol.NVMe"));
+        expectProp(*drive, ifaceDrive, "Type",
+                   std::string(
+                       "xyz.openbmc_project.Inventory.Item.Drive.DriveType.SSD"));
+        expectProp(*drive, ifaceAsset, "Model",
+                   std::string("INTEL SSDPEKNW512G8"));
+        expectProp(*drive, ifaceAsset, "SerialNumber",
+                   std::string("BTNH90350E9W512A"));
+        /* the BIOS says Manufacturer "N/A" -- do not put that in front of a
+         * customer */
+        check(drive->interfaces.at(ifaceAsset).count("Manufacturer") == 0,
+              "N/A manufacturer suppressed");
+        expectProp(*drive, ifaceOperationalStatus, "Functional", true);
+    }
+
+    /* A drive predicting its own failure must not read as healthy. */
+    {
+        nlohmann::json dying =
+            load(samples + "/drives/NVMe_Device0_NSID1.json");
+        dying["FailurePredicted"] = true;
+        const auto obj = mapDrive(dying, "x");
+        check(obj.has_value(), "failing drive maps");
+        if (obj)
+        {
+            expectProp(*obj, ifaceOperationalStatus, "Functional", false);
+        }
+    }
+
     /* ---- Notify-carriable split ------------------------------------------
      * Notify()'s argument type is fixed by the Inventory.Manager yaml; a value
      * outside it is silently dropped by sdbusplus, so exactly the byte /
