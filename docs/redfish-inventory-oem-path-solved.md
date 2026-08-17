@@ -252,3 +252,43 @@ until evidence says the BIOS cares.
 Publishing PCIe/Storage/NetworkAdapters to D-Bus is also still to do: the
 receiver will write `collections/pcie/*.json`, but the translator maps only
 DIMMs and CPUs today.
+
+## Proven on our own firmware, 2026-08-17
+
+Flashed as `flax-onetree-1.1.0-202608171911` and exercised through the whole
+cycle. Nothing below is a hot-deploy.
+
+| step | result |
+|---|---|
+| armed GET, host boot from empty | BIOS took the OEM path, pushed **108,556 bytes**, host stayed Running |
+| normalize | memory 12, processors 2, pcie 25, drives 1 |
+| CRCs stored | `{"CPU":3032237160,"DIMM":2764192848,"PCIE":3428776986}` |
+| second boot (CRCs match) | **850-byte delta, zero groups re-pushed**, inventory intact |
+| BMC reflash + reboot | boot-time run republished all of it from disk |
+
+Redfish, from the flashed image:
+
+```
+Memory 12   Processors 2   PCIeDevices 25   FabricAdapters 1   Storage drives 1
+nic_00_5E_00  FirmwareVersion 14.27.26.06  Slot 2
+384 GiB, 40 cores, 2 CPUs
+```
+
+The CPU and DIMM CRCs the BIOS sent us are byte-identical to the ones the OEM
+BMC received months earlier, which independently confirms both that the BIOS
+derives them deterministically from unchanged hardware and that we are storing
+the right value.
+
+**The delta boot validated the riskiest logic in the receiver.** A push that
+mentions no groups must not erase them: had the receiver stored what it was
+given, that boot would have wiped 25 PCIe devices and the drive. It did not.
+That trap was only visible because the OEM capture let us watch the same
+850-byte delta overwrite the OEM's own stored `inventory.json` while its redis
+kept the full inventory.
+
+One operational lesson, unrelated to the feature but expensive: a live
+full-image `flashcp` can leave the SPI flash in a mode U-Boot cannot probe
+(`unrecognized JEDEC id bytes: 00, 00, 00`), and **only a full AC power cycle
+clears it** -- the chip keeps VCC across a warm reset. It happened twice in one
+evening. The give-away that the image is fine is that U-Boot is running from
+the very chip it claims it cannot find.
