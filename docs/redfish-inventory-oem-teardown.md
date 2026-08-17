@@ -60,9 +60,17 @@ host-interface path, not this lib. The NetFn for this lib is bound at registrati
   `CapacityMiB` 32768, `Manufacturer` Hynix, `SerialNumber`, `PartNumber`
   "HMA84GR7MFR4N-UH", `MemoryLocation{Socket,Controller,Channel,Slot}`, `DeviceLocator`
   "DIMM A0", `OperatingSpeedMhz` 2400. ✅
-- **Systems[0].PCIeDevices[25]** — **`@odata.id` references only, NO data.** Confirms the
-  BIOS enumerates PCIe but ships no descriptive fields. Host NIC / add-in cards not
-  recoverable from this. ✅ (matches user's known BIOS limitation)
+- **Systems[0].PCIeDevices[25]** — `@odata.id` references only. **CORRECTION
+  (2026-08-14): this is a link list, not the payload — do not conclude from it that the
+  BIOS ships no PCIe detail.** The data is under `Chassis[0].Links.PCIeDevices`, and it
+  is complete: all 25 devices carry their functions inline, 47 in total, each with
+  `VendorId`, `DeviceId`, `ClassCode`, `RevisionId`, `SubsystemId`, `SubsystemVendorId`,
+  `DeviceClass` and a human name (e.g. `00_01_00` → `8086 F1A8 MASS Slot 3`,
+  ClassCode `0x010802`). Identical in both the 07-23 and 07-31 captures, and independently
+  confirmed by the OEM BMC's stored keys in `redis-storage-pcie.dump`. So the BIOS *can*
+  deliver full PCIe inventory over the OEM protocol; what it does not deliver is that
+  detail on the generic-Redfish **fallback** path we currently use, where it posts a
+  single device (`00_01_00`) with the function detail stripped to a bare link.
 - **Chassis[0].NetworkAdapters[2]** — HAS data: `FirmwarePackageVersion` 14.27.26.06
   (Mellanox), NetworkPorts with `LinkStatus` "Up", `ActiveLinkTechnology` Ethernet.
   **OPEN QUESTION:** is this sourced from the BIOS KCS push or from the BMC's own NC-SI/MCTP
