@@ -1,0 +1,3 @@
+# Build products of the native mapping test
+test_map
+.deps/

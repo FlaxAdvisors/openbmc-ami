@@ -1,0 +1,601 @@
+{
+	"Id":	"DevType1_CPU1",
+	"Name":	"DevType1_CPU1",
+	"Socket":	"1",
+	"ProcessorType":	"CPU",
+	"Model":	"Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz, 2000 Mhz, 20 Core(s), 40 Logical Processor(s)",
+	"ProcessorId":	{
+		"IdentificationRegisters":	"0x00050654BFEBFBFF",
+		"EffectiveFamily":	"Intel(R) Xeon(R) Gold 6138 CPU @ 2.00GHz"
+	},
+	"Manufacturer":	"Intel(R) Corporation",
+	"MaxSpeedMHz":	2000,
+	"TotalCores":	20,
+	"TotalThreads":	40,
+	"ProcessorArchitecture":	"x86",
+	"Status":	{
+		"State":	"Enabled",
+		"Health":	"OK"
+	},
+	"SubProcessors":	[{
+			"Id":	"DevType1_CPU1_Core0",
+			"Name":	"DevType1_CPU1_Core0",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core0_Thread0",
+					"Name":	"DevType1_CPU1_Core0_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core0_Thread1",
+					"Name":	"DevType1_CPU1_Core0_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core1",
+			"Name":	"DevType1_CPU1_Core1",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core1_Thread0",
+					"Name":	"DevType1_CPU1_Core1_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core1_Thread1",
+					"Name":	"DevType1_CPU1_Core1_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core2",
+			"Name":	"DevType1_CPU1_Core2",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core2_Thread0",
+					"Name":	"DevType1_CPU1_Core2_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core2_Thread1",
+					"Name":	"DevType1_CPU1_Core2_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core3",
+			"Name":	"DevType1_CPU1_Core3",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core3_Thread0",
+					"Name":	"DevType1_CPU1_Core3_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core3_Thread1",
+					"Name":	"DevType1_CPU1_Core3_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core4",
+			"Name":	"DevType1_CPU1_Core4",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core4_Thread0",
+					"Name":	"DevType1_CPU1_Core4_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core4_Thread1",
+					"Name":	"DevType1_CPU1_Core4_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core5",
+			"Name":	"DevType1_CPU1_Core5",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core5_Thread0",
+					"Name":	"DevType1_CPU1_Core5_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core5_Thread1",
+					"Name":	"DevType1_CPU1_Core5_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core6",
+			"Name":	"DevType1_CPU1_Core6",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core6_Thread0",
+					"Name":	"DevType1_CPU1_Core6_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core6_Thread1",
+					"Name":	"DevType1_CPU1_Core6_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core7",
+			"Name":	"DevType1_CPU1_Core7",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core7_Thread0",
+					"Name":	"DevType1_CPU1_Core7_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core7_Thread1",
+					"Name":	"DevType1_CPU1_Core7_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core8",
+			"Name":	"DevType1_CPU1_Core8",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core8_Thread0",
+					"Name":	"DevType1_CPU1_Core8_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core8_Thread1",
+					"Name":	"DevType1_CPU1_Core8_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core9",
+			"Name":	"DevType1_CPU1_Core9",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core9_Thread0",
+					"Name":	"DevType1_CPU1_Core9_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core9_Thread1",
+					"Name":	"DevType1_CPU1_Core9_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core10",
+			"Name":	"DevType1_CPU1_Core10",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core10_Thread0",
+					"Name":	"DevType1_CPU1_Core10_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core10_Thread1",
+					"Name":	"DevType1_CPU1_Core10_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core11",
+			"Name":	"DevType1_CPU1_Core11",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core11_Thread0",
+					"Name":	"DevType1_CPU1_Core11_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core11_Thread1",
+					"Name":	"DevType1_CPU1_Core11_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core12",
+			"Name":	"DevType1_CPU1_Core12",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core12_Thread0",
+					"Name":	"DevType1_CPU1_Core12_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core12_Thread1",
+					"Name":	"DevType1_CPU1_Core12_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core13",
+			"Name":	"DevType1_CPU1_Core13",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core13_Thread0",
+					"Name":	"DevType1_CPU1_Core13_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core13_Thread1",
+					"Name":	"DevType1_CPU1_Core13_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core14",
+			"Name":	"DevType1_CPU1_Core14",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core14_Thread0",
+					"Name":	"DevType1_CPU1_Core14_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core14_Thread1",
+					"Name":	"DevType1_CPU1_Core14_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core15",
+			"Name":	"DevType1_CPU1_Core15",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core15_Thread0",
+					"Name":	"DevType1_CPU1_Core15_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core15_Thread1",
+					"Name":	"DevType1_CPU1_Core15_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core16",
+			"Name":	"DevType1_CPU1_Core16",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core16_Thread0",
+					"Name":	"DevType1_CPU1_Core16_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core16_Thread1",
+					"Name":	"DevType1_CPU1_Core16_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core17",
+			"Name":	"DevType1_CPU1_Core17",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core17_Thread0",
+					"Name":	"DevType1_CPU1_Core17_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core17_Thread1",
+					"Name":	"DevType1_CPU1_Core17_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core18",
+			"Name":	"DevType1_CPU1_Core18",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core18_Thread0",
+					"Name":	"DevType1_CPU1_Core18_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core18_Thread1",
+					"Name":	"DevType1_CPU1_Core18_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}, {
+			"Id":	"DevType1_CPU1_Core19",
+			"Name":	"DevType1_CPU1_Core19",
+			"ProcessorType":	"Core",
+			"MaxSpeedMHz":	2000,
+			"TotalThreads":	2,
+			"Status":	{
+				"State":	"Enabled",
+				"Health":	"OK"
+			},
+			"SubProcessors":	[{
+					"Id":	"DevType1_CPU1_Core19_Thread0",
+					"Name":	"DevType1_CPU1_Core19_Thread0",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}, {
+					"Id":	"DevType1_CPU1_Core19_Thread1",
+					"Name":	"DevType1_CPU1_Core19_Thread1",
+					"ProcessorType":	"Thread",
+					"MaxSpeedMHz":	2000,
+					"Status":	{
+						"State":	"Enabled",
+						"Health":	"OK"
+					}
+				}]
+		}]
+}

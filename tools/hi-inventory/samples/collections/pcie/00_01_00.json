@@ -1,0 +1,18 @@
+{
+	"Id":	"00_01_00",
+	"Name":	"00_01_00",
+	"Manufacturer":	"8086F1A8",
+	"Description":	"8086 MASS Slot 3",
+	"AssetTag":	"",
+	"DeviceType":	"SingleFunction",
+	"FirmwareVersion":	"",
+	"Status":	{
+		"State":	"Enabled",
+		"Health":	"OK"
+	},
+	"Links":	{
+		"PCIeFunctions":	[{
+				"@odata.id":	"/redfish/v1/Chassis/Cpld/PCIeDevices/00_01_00/Functions/DevType3_SLT3_DevIndex0"
+			}]
+	}
+}

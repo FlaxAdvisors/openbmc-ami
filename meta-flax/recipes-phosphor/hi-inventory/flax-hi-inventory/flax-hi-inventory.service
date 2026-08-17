@@ -1,0 +1,15 @@
+[Unit]
+Description=Publish host-interface inventory on D-Bus
+Documentation=file:///usr/share/doc/flax-hi-inventory
+Wants=xyz.openbmc_project.Inventory.Manager.service
+After=xyz.openbmc_project.Inventory.Manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flax-hi-inventory
+# The BIOS clear-then-post cycle fires this repeatedly; a run is cheap and
+# every run republishes everything, so a missed trigger self-corrects.
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

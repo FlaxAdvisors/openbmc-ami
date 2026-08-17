@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for host-interface inventory pushes
+
+[Path]
+# bmcweb touches this after every collection POST/DELETE.  systemd will not
+# start a second instance while one is running and re-triggers once afterwards,
+# so a twelve-DIMM burst costs one or two runs.
+PathModified=/var/lib/flax-inventory/collections/.updated
+Unit=flax-hi-inventory.service
+
+[Install]
+WantedBy=multi-user.target

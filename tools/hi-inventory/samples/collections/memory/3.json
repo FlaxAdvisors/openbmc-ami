@@ -1,0 +1,26 @@
+{
+	"Name":	"DevType2_DIMM3",
+	"Id":	"DevType2_DIMM3",
+	"MemoryDeviceType":	"DDR4",
+	"BaseModuleType":	"RDIMM",
+	"RankCount":	2,
+	"MemoryLocation":	{
+		"Socket":	0,
+		"MemoryController":	0,
+		"Channel":	1,
+		"Slot":	1
+	},
+	"CapacityMiB":	32768,
+	"DataWidthBits":	64,
+	"BusWidthBits":	72,
+	"Manufacturer":	"Hynix",
+	"SerialNumber":	"28D77D67",
+	"PartNumber":	"HMA84GR7MFR4N-UH    ",
+	"AllowedSpeedsMHz":	[2400],
+	"Status":	{
+		"State":	"Enabled",
+		"Health":	"OK"
+	},
+	"DeviceLocator":	"DIMM A3",
+	"OperatingSpeedMhz":	2400
+}
