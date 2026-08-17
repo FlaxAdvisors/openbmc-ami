@@ -20,4 +20,5 @@ SRC_URI:append:tiogapass = " \
     file://0012-hostiface-oem-inventorydata-get-and-hi-only-gate.patch \
     file://0013-hostiface-receive-fallback-collection-pushes.patch \
     file://0014-hostiface-touch-inventory-updated-stamp.patch \
+    file://0015-hostiface-serve-real-oem-inventorydata-response.patch \
 "
