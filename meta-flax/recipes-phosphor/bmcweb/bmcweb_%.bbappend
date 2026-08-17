@@ -22,4 +22,6 @@ SRC_URI:append:tiogapass = " \
     file://0014-hostiface-touch-inventory-updated-stamp.patch \
     file://0015-hostiface-serve-real-oem-inventorydata-response.patch \
     file://0016-hostiface-store-drives-from-oem-push.patch \
+    file://0017-redfish-render-pciedevice-firmwareversion.patch \
+    file://0018-redfish-render-fabricadapter-firmwareversion.patch \
 "

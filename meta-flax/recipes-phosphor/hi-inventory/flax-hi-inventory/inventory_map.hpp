@@ -70,6 +70,10 @@ inline constexpr const char* ifacePcieDevice =
     "xyz.openbmc_project.Inventory.Item.PCIeDevice";
 inline constexpr const char* ifaceDrive =
     "xyz.openbmc_project.Inventory.Item.Drive";
+inline constexpr const char* ifaceRevision =
+    "xyz.openbmc_project.Inventory.Decorator.Revision";
+inline constexpr const char* ifaceFabricAdapter =
+    "xyz.openbmc_project.Inventory.Item.FabricAdapter";
 
 /* PCIe devices and drives hang off the same motherboard path as everything
  * else; bmcweb finds them by interface anywhere under the inventory root and
@@ -78,6 +82,7 @@ inline constexpr const char* pciePrefix =
     "/system/chassis/motherboard/pcie_";
 inline constexpr const char* drivePrefix =
     "/system/chassis/motherboard/drive_";
+inline constexpr const char* nicPrefix = "/system/chassis/motherboard/nic_";
 
 /** @brief DIMM slot index from an SMBIOS device locator.
  *
@@ -113,6 +118,21 @@ std::optional<Object> mapPcieDevice(const nlohmann::json& j,
 /** @brief Map one drive out of the payload's Storage[].Drives[]. */
 std::optional<Object> mapDrive(const nlohmann::json& j,
                                const std::string& fallbackId);
+
+/** @brief A network card, as a Redfish FabricAdapter, derived from the same
+ *         PCIe record.
+ *
+ *  Returns nullopt unless the device presents a NetworkController function, so
+ *  only actual NICs become adapters.  bmcweb's FabricAdapter is asset-level
+ *  only -- no Ports sub-resource -- so this carries identity and slot, not the
+ *  MAC.
+ */
+std::optional<Object> mapFabricAdapter(const nlohmann::json& j,
+                                       const std::string& fallbackId);
+
+/** @brief Slot label out of a BIOS PCIe description ("15B3 NIC Slot 2" ->
+ *         "Slot 2"), or nullopt when the device is not in a slot. */
+std::optional<std::string> slotFromDescription(const std::string& description);
 
 /** @brief Sanitise an id into something usable as a D-Bus path element. */
 std::string sanitizeId(const std::string& raw, const std::string& fallback);

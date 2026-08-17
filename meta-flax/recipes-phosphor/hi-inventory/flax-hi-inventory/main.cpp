@@ -282,6 +282,7 @@ int main()
     /* PCIe and drives only ever arrive via the OEM push; on the generic
      * fallback these directories hold at most one stripped record. */
     std::set<std::string> pciePaths;
+    std::set<std::string> nicPaths;
     for (const auto& file : groupFiles("pcie"))
     {
         auto j = readJson(file);
@@ -293,6 +294,13 @@ int main()
         {
             pciePaths.insert(obj->path);
             objects.push_back(std::move(*obj));
+        }
+        /* The same record may also be a network card, which Redfish models
+         * separately as a FabricAdapter. */
+        if (auto nic = mapFabricAdapter(*j, file.stem().string()))
+        {
+            nicPaths.insert(nic->path);
+            objects.push_back(std::move(*nic));
         }
     }
 
@@ -326,6 +334,7 @@ int main()
     addAbsentObjects(bus, ifaceCpu, cpuPrefix, cpuPaths, objects);
     addAbsentObjects(bus, ifacePcieDevice, pciePrefix, pciePaths, objects);
     addAbsentObjects(bus, ifaceDrive, drivePrefix, drivePaths, objects);
+    addAbsentObjects(bus, ifaceFabricAdapter, nicPrefix, nicPaths, objects);
 
     std::vector<DeferredProperty> deferred;
     const auto payload = splitPayload(objects, deferred);
@@ -340,9 +349,10 @@ int main()
 
     fprintf(stderr,
             "flax-hi-inventory: published %zu DIMM(s), %zu CPU(s), "
-            "%zu PCIe device(s), %zu drive(s), %zu deferred propert%s\n",
+            "%zu PCIe device(s), %zu drive(s), %zu NIC(s), "
+            "%zu deferred propert%s\n",
             memoryPaths.size(), cpuPaths.size(), pciePaths.size(),
-            drivePaths.size(), deferred.size(),
+            drivePaths.size(), nicPaths.size(), deferred.size(),
             deferred.size() == 1 ? "y" : "ies");
     return 0;
 }

@@ -294,6 +294,45 @@ int main(int argc, char** argv)
         }
     }
 
+    /* ---- FabricAdapter + firmware version ---------------------------------
+     * 00_5E_00 is the Mellanox ConnectX-4 Lx, the card CLAUDE.md records as
+     * invisible to SMBIOS.  Over the host interface we get it, with firmware. */
+    const auto mlx = load(samples + "/pcie/00_5E_00.json");
+    const auto mlxDev = mapPcieDevice(mlx, "x");
+    check(mlxDev.has_value(), "mellanox pcie maps");
+    if (mlxDev)
+    {
+        expectProp(*mlxDev, ifacePcieDevice, "Function0VendorId",
+                   std::string("0x15B3"));
+        expectProp(*mlxDev, ifacePcieDevice, "Function0DeviceClass",
+                   std::string("NetworkController"));
+        expectProp(*mlxDev, ifaceRevision, "Version",
+                   std::string("14.27.26.06"));
+    }
+
+    const auto nic = mapFabricAdapter(mlx, "x");
+    check(nic.has_value(), "mellanox becomes a FabricAdapter");
+    if (nic)
+    {
+        check(nic->path == "/system/chassis/motherboard/nic_00_5E_00",
+              "nic path, got " + nic->path);
+        check(nic->interfaces.count(ifaceFabricAdapter) == 1,
+              "FabricAdapter marker interface present");
+        expectProp(*nic, ifaceLocationCode, "LocationCode",
+                   std::string("Slot 2"));
+        expectProp(*nic, ifaceRevision, "Version", std::string("14.27.26.06"));
+    }
+
+    /* Everything that is not a network controller must stay out of the
+     * FabricAdapters collection -- otherwise all 25 devices become "adapters". */
+    check(!mapFabricAdapter(load(samples + "/pcie/00_01_00.json"), "x")
+               .has_value(),
+          "the NVMe is not a fabric adapter");
+    check(!slotFromDescription("8086 A1A1 MEM Onboard").has_value(),
+          "onboard device has no slot label");
+    check(slotFromDescription("15B3 NIC Slot 2") == std::string("Slot 2"),
+          "slot parsed from description");
+
     /* ---- Drives ----------------------------------------------------------- */
     const auto drive =
         mapDrive(load(samples + "/drives/NVMe_Device0_NSID1.json"), "fallback");

@@ -1,0 +1,71 @@
+From: Flax Advisors <support@flaxadvisors.com>
+Date: Sun, 17 Aug 2026 00:00:00 +0000
+Subject: [PATCH] redfish: render PCIeDevice.FirmwareVersion
+
+The Redfish PCIeDevice schema carries FirmwareVersion, but bmcweb never
+populated it -- pcie.hpp contains no reference to a version at all.  The TP26
+BIOS reports adapter firmware over the host interface for cards that have one
+(the Mellanox ConnectX-4 Lx gives 14.27.26.06), so the data reached the BMC and
+then had nowhere to go.
+
+Read it from Decorator.Revision, which is the interface bmcweb already uses for
+a processor's Version and which flax-hi-inventory now publishes on PCIe device
+objects.  Absent on devices with no known firmware, which is most of them, and
+that is not an error.
+
+Upstream-Status: Pending
+
+---
+ redfish-core/lib/pcie.hpp | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/redfish-core/lib/pcie.hpp b/redfish-core/lib/pcie.hpp
+index 83a0912..7368cb2 100644
+--- a/redfish-core/lib/pcie.hpp
++++ b/redfish-core/lib/pcie.hpp
+@@ -335,6 +335,34 @@ inline void getPCIeDeviceState(
+         });
+ }
+ 
++// Adapter firmware, where the producer knows it.  The Redfish PCIeDevice
++// schema carries FirmwareVersion but bmcweb never populated it; the TP26 BIOS
++// reports it over the host interface for cards that have one (the Mellanox
++// ConnectX-4 Lx gives 14.27.26.06), and flax-hi-inventory publishes it on
++// Decorator.Revision -- the same interface bmcweb already reads for a
++// processor's Version.
++inline void getPCIeDeviceRevision(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& pcieDevicePath, const std::string& service)
++{
++    dbus::utility::getProperty<std::string>(
++        service, pcieDevicePath,
++        "xyz.openbmc_project.Inventory.Decorator.Revision", "Version",
++        [asyncResp](const boost::system::error_code& ec,
++                    const std::string& version) {
++            if (ec)
++            {
++                // Absent on devices whose firmware version is unknown, which
++                // is most of them.  Not an error.
++                return;
++            }
++            if (!version.empty())
++            {
++                asyncResp->res.jsonValue["FirmwareVersion"] = version;
++            }
++        });
++}
++
+ inline void getPCIeDeviceAsset(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     const std::string& pcieDevicePath, const std::string& service)
+@@ -545,6 +573,7 @@ inline void afterGetValidPcieDevicePath(
+ {
+     addPCIeDeviceCommonProperties(asyncResp, pcieDeviceId);
+     getPCIeDeviceAsset(asyncResp, pcieDevicePath, service);
++    getPCIeDeviceRevision(asyncResp, pcieDevicePath, service);
+     getPCIeDeviceState(asyncResp, pcieDevicePath, service);
+     getPCIeDeviceHealth(asyncResp, pcieDevicePath, service);
+     getPCIeDeviceProperties(
+-- 
+2.34.1
+

@@ -548,6 +548,15 @@ std::optional<Object> mapPcieDevice(const nlohmann::json& j,
     }
     obj.interfaces[ifacePcieDevice] = std::move(dev);
 
+    /* Adapter firmware, where the BIOS reports it -- the Mellanox gives
+     * "14.27.26.06".  Item.PCIeDevice has no firmware field, so it goes on
+     * Decorator.Revision, which is the interface bmcweb already reads for a
+     * processor's Version. */
+    if (auto v = getString(j, "FirmwareVersion"))
+    {
+        obj.interfaces[ifaceRevision] = {{"Version", *v}};
+    }
+
     /* Manufacturer here is the BIOS's concatenated vendor+device id
      * ("8086F1A8"), not a vendor name, so it is deliberately NOT published as
      * Decorator.Asset.Manufacturer -- the per-function VendorId carries that
@@ -561,6 +570,107 @@ std::optional<Object> mapPcieDevice(const nlohmann::json& j,
     obj.interfaces[ifaceItem] = std::move(item);
     obj.interfaces[ifaceOperationalStatus] = {
         {"Functional", statusFunctional(j)}};
+
+    return obj;
+}
+
+std::optional<std::string> slotFromDescription(const std::string& description)
+{
+    /* The BIOS appends a placement to its PCIe descriptions: "15B3 NIC Slot 2"
+     * for an add-in card, "8086 A1A1 MEM Onboard" for something soldered
+     * down.  Only the former is a location worth publishing. */
+    const auto pos = description.rfind("Slot ");
+    if (pos == std::string::npos)
+    {
+        return std::nullopt;
+    }
+    std::string slot = description.substr(pos);
+    /* Guard against a description that merely ends with the word. */
+    if (slot.size() <= 5)
+    {
+        return std::nullopt;
+    }
+    return slot;
+}
+
+std::optional<Object> mapFabricAdapter(const nlohmann::json& j,
+                                       const std::string& fallbackId)
+{
+    if (!j.is_object())
+    {
+        return std::nullopt;
+    }
+
+    /* Only a device presenting a network-controller function is an adapter.
+     * This is what keeps the 25-device list from turning into 25 "adapters":
+     * on this machine exactly one qualifies, the Mellanox in slot 2. */
+    bool isNetwork = false;
+    const nlohmann::json* links = getObject(j, "Links");
+    if (links != nullptr)
+    {
+        auto fns = links->find("PCIeFunctions");
+        if (fns != links->end() && fns->is_array())
+        {
+            for (const auto& fn : *fns)
+            {
+                if (!fn.is_object())
+                {
+                    continue;
+                }
+                auto cls = getString(fn, "DeviceClass");
+                if (cls && *cls == "NetworkController")
+                {
+                    isNetwork = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (!isNetwork)
+    {
+        return std::nullopt;
+    }
+
+    std::string id = fallbackId;
+    if (auto v = getString(j, "Id"))
+    {
+        id = *v;
+    }
+
+    Object obj;
+    obj.path = std::string(nicPrefix) + sanitizeId(id, fallbackId);
+
+    /* Marker interface -- no properties of its own, but it must be present for
+     * bmcweb to enumerate the adapter at all. */
+    obj.interfaces[ifaceFabricAdapter] = {};
+
+    const auto description = getString(j, "Description");
+    if (description)
+    {
+        if (auto slot = slotFromDescription(*description))
+        {
+            obj.interfaces[ifaceLocationCode] = {{"LocationCode", *slot}};
+        }
+    }
+
+    /* No Model/PartNumber/SerialNumber: the BIOS gives none for the card, and
+     * its "Manufacturer" field is a vendor+device id rather than a name.  The
+     * identity lives on the matching PCIe device, which carries VendorId,
+     * DeviceId and the firmware version. */
+    Properties item;
+    item["Present"] = statusPresent(j);
+    if (description)
+    {
+        item["PrettyName"] = *description;
+    }
+    obj.interfaces[ifaceItem] = std::move(item);
+    obj.interfaces[ifaceOperationalStatus] = {
+        {"Functional", statusFunctional(j)}};
+
+    if (auto v = getString(j, "FirmwareVersion"))
+    {
+        obj.interfaces[ifaceRevision] = {{"Version", *v}};
+    }
 
     return obj;
 }
