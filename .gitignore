@@ -24,4 +24,6 @@ image-bios
 *_TPC_P26*.bin
 *flaxca*.bin
 *flax_TPC_P26*.bin
-tools/bios-ca-swap/
+# The host-side tooling now lives in the private FlaxAdvisors/openbmc-ami-tools
+# repo. Anchored to the repo root so poky/documentation/tools/ is unaffected.
+/tools/
