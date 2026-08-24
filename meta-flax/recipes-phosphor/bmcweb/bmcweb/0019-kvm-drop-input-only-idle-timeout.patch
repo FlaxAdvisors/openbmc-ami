@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] kvm: stop disconnecting consoles that are merely being watched
+
+The KVM websocket carried its own idle timer, which closed the connection
+with "Session timeout" once lastActivityTime was older than the *web*
+SessionTimeout (300s on our units).  lastActivityTime was stamped in exactly
+two places: onMessage(), i.e. data arriving *from the browser*, and once at
+connect.  Outbound video never counted.
+
+So a console that was streaming perfectly was considered idle unless the
+operator kept typing, and watching a host POST -- minutes of deliberately not
+touching anything -- disconnected every five minutes.  Measured on hardware:
+an otherwise healthy session closed with reason "Session timeout".
+
+The timer was also redundant and unsafe.  bmcweb already applies
+beast::websocket::stream_base::timeout::suggested(server) to every websocket,
+which gives handshake_timeout=30s, idle_timeout=300s and keep_alive_pings=true.
+Beast's idle timer resets on stream activity *including outbound writes* and
+pings an idle peer, so a live console stays up and a browser that vanished is
+detected and closed -- which fires onclose(), erases the session and frees the
+slot for the next user.  That is the behaviour we want, and it is why the SOL
+console (obmc_console.hpp, which adds no timer of its own) has always survived
+the web UI timing out.  Unsafe because the timer ran in its own std::thread and
+called conn.close() on the beast websocket from outside the io_context.
+
+Drop the timer and let KVM rely on beast exactly as SOL does.  The unrelated
+"close KVM when the web session was deleted" path is kept; it just calls
+conn.close() directly now, with a reason that says what actually happened.
+
+---
+diff --git a/include/kvm_websocket.hpp b/include/kvm_websocket.hpp
+index e9526ec8..b1e73551 100644
+--- a/include/kvm_websocket.hpp
++++ b/include/kvm_websocket.hpp
+@@ -101,9 +101,7 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+ {
+   public:
+     explicit KvmSession(crow::websocket::Connection& connIn) :
+-        conn(connIn), hostSocket(conn.getIoContext()),
+-        timeoutInSeconds(
+-            persistent_data::SessionStore::getInstance().getTimeoutInSeconds())
++        conn(connIn), hostSocket(conn.getIoContext())
+     {
+         uint16_t port = getPortNumberFromDBus();
+         boost::asio::ip::tcp::endpoint endpoint(
+@@ -124,8 +122,6 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+ 
+             doRead();
+         });
+-        startTimeoutTimer(); // Invoke the timer function when the KVM WebSocket
+-                             // is opened.
+     }
+ 
+     void onMessage(const std::string& data)
+@@ -149,13 +145,6 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+         BMCWEB_LOG_DEBUG("conn:{}, inputbuffer size {}", logPtr(&conn),
+                          inputBuffer.size());
+         doWrite();
+-        lastActivityTime = persistent_data::SessionStore::getInstance()
+-                               .getTimeSinceLastTimeoutInSeconds();
+-    }
+-
+-    ~KvmSession()
+-    {
+-        stopTimeoutTimer();
+     }
+ 
+   protected:
+@@ -199,7 +188,7 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+             // closing KVM when web session deleted
+             if (!conn.session->kvmConnections)
+             {
+-                closeWebSocket();
++                conn.close("Web session closed");
+             }
+             doRead();
+         });
+@@ -257,83 +246,11 @@ class KvmSession : public std::enable_shared_from_this<KvmSession>
+         });
+     }
+ 
+-    void startTimeoutTimer()
+-    {
+-        if (!timerRunning) // Check if the timer is not already running
+-        {
+-            timerRunning = true;
+-            lastActivityTime =
+-                persistent_data::SessionStore::getInstance()
+-                    .getTimeSinceLastTimeoutInSeconds(); // Get the current time
+-                                                         // and store it in
+-                                                         // lastActivityTime
+-
+-            // Start a new thread (timeoutTimer) to handle the timeout logic
+-            timeoutTimer = std::thread([this]() {
+-                while (timerRunning)
+-                {
+-                    std::this_thread::sleep_for(std::chrono::seconds(1));
+-                    // Get the timeout value from the persistent data store
+-                    int64_t timeoutValue =
+-                        persistent_data::SessionStore::getInstance()
+-                            .getTimeoutInSeconds();
+-                    timeoutInSeconds = std::chrono::seconds(
+-                        timeoutValue);      // Convert the timeout value to
+-                                            // std::chrono::seconds and update
+-                                            // timeoutInSeconds
+-                    applySessionTimeouts(); // Call the function to apply
+-                                            // session timeouts
+-                }
+-            });
+-        }
+-    }
+-
+-    void stopTimeoutTimer()
+-    {
+-        if (timerRunning)         // Check if the timer is currently running
+-        {
+-            timerRunning = false; // Set the flag to indicate that the timer is
+-                                  // no longer running
+-            if (timeoutTimer.joinable()) // Check if the thread associated with
+-                                         // the timeoutTimer is joinable
+-            {
+-                timeoutTimer.join(); // If it's joinable, join (wait for) the
+-                                     // thread to finish its execution
+-            }
+-        }
+-    }
+-
+-    void applySessionTimeouts()
+-    {
+-        auto timeNow = std::chrono::steady_clock::now();
+-        int64_t timeoutValue =
+-            persistent_data::SessionStore::getInstance().getTimeoutInSeconds();
+-        timeoutInSeconds = std::chrono::seconds(timeoutValue);
+-        if (timeNow - lastActivityTime >=
+-            timeoutInSeconds) // This condition checks if the time elapsed since
+-                              // the last activity in the KVM session is greater
+-                              // than or equal to the configured timeout. If
+-                              // true, it means that the session has been
+-                              // inactive for the specified timeout duration.
+-        {
+-            closeWebSocket();
+-        }
+-    }
+-
+-    void closeWebSocket()
+-    {
+-        conn.close("Session timeout");
+-    }
+-
+     crow::websocket::Connection& conn;
+     boost::asio::ip::tcp::socket hostSocket;
+     boost::beast::flat_static_buffer<1024UL * 50UL> outputBuffer;
+     boost::beast::flat_static_buffer<1024UL> inputBuffer;
+     bool doingWrite{false};
+-    std::atomic<bool> timerRunning{false};
+-    std::thread timeoutTimer;
+-    std::chrono::time_point<std::chrono::steady_clock> lastActivityTime;
+-    std::chrono::seconds timeoutInSeconds;
+ };
+ 
+ using SessionMap = boost::container::flat_map<crow::websocket::Connection*,

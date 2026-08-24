@@ -1,11 +1,13 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-# ── TEMPORARY DIAGNOSTIC — REMOVE BEFORE SHIPPING ────────────────────────────
-# Capture the TP26 BIOS's real host-interface request URLs and status codes, to
-# find where it POSTs its memory/CPU/PCIe collections (they currently reach no
-# route we serve).  Very verbose; do not leave enabled in a release image.
-EXTRA_OEMESON:append:tiogapass = " -Dbmcweb-logging=debug"
-# ─────────────────────────────────────────────────────────────────────────────
+# bmcweb logging stays at the upstream default ('error').  Do NOT ship
+# -Dbmcweb-logging=debug: it puts four BMCWEB_LOG_DEBUG calls per video frame
+# in the KVM read/write handlers, on the io_context thread -- ~60 journald
+# writes/second during a console session on a 400MHz ARM11.  That competes with
+# the video pipeline for CPU and floods the 4MB volatile journal, so rsyslog
+# starts dropping (~900 msgs/min) and the journal retains only minutes of
+# history, which is exactly what you need when diagnosing a field problem.
+# Re-enable it temporarily on a bench unit only.
 
 SRC_URI:append:tiogapass = " \
     file://0001-redfish-browser-logo-nav-and-caching.patch \
@@ -24,4 +26,5 @@ SRC_URI:append:tiogapass = " \
     file://0016-hostiface-store-drives-from-oem-push.patch \
     file://0017-redfish-render-pciedevice-firmwareversion.patch \
     file://0018-redfish-render-fabricadapter-firmwareversion.patch \
+    file://0019-kvm-drop-input-only-idle-timeout.patch \
 "
