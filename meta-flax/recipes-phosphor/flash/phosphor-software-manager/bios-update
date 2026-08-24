@@ -84,6 +84,37 @@ find_pnor_dev() {
     return 1
 }
 
+# ── systemd watchdog guard ───────────────────────────────────────────────────
+# A full BIOS flashcp takes ~4 min and hammers the AHB bus enough to starve
+# systemd (PID1), so the aspeed hardware watchdog (RuntimeWatchdogUSec, default
+# 2 min, pretimeout=panic) fires and RESETS THE BMC mid-write — leaving a
+# half-written, corrupt host BIOS.  Disarm it for the duration of the flash and
+# always re-arm it afterwards (including via the cleanup trap on any failure).
+
+WDT_MGR="org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager"
+_wdt_disarmed=0
+_wdt_saved=""
+
+wdt_disarm() {
+    _wdt_saved=$(busctl get-property ${WDT_MGR} RuntimeWatchdogUSec 2>/dev/null | awk '{print $2}')
+    case "${_wdt_saved}" in ''|0) _wdt_saved=120000000 ;; esac
+    echo "bios-update: disarming systemd watchdog (was ${_wdt_saved} us) for the flash"
+    if busctl set-property ${WDT_MGR} RuntimeWatchdogUSec t 0 2>/dev/null; then
+        _wdt_disarmed=1
+    else
+        echo "bios-update: warning: could not disarm systemd watchdog (continuing)"
+    fi
+}
+
+wdt_rearm() {
+    if [ "${_wdt_disarmed}" = "1" ]; then
+        echo "bios-update: re-arming systemd watchdog (${_wdt_saved} us)"
+        busctl set-property ${WDT_MGR} RuntimeWatchdogUSec t "${_wdt_saved}" 2>/dev/null \
+            || echo "bios-update: warning: could not re-arm systemd watchdog"
+        _wdt_disarmed=0
+    fi
+}
+
 # ── cleanup trap ──────────────────────────────────────────────────────────────
 # Runs on any exit (success or failure) — ensures SPI bus returns to PCH.
 
@@ -94,6 +125,8 @@ cleanup() {
         spi_unbind 2>/dev/null || true
         spi_mux_to_pch 2>/dev/null || true
     fi
+    # Always restore the watchdog, even on a failed/partial flash (idempotent).
+    wdt_rearm 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -161,8 +194,12 @@ fi
 echo "bios-update: flashing ${IMAGE_FILE} → ${PNOR_DEV}"
 
 # ── flash ─────────────────────────────────────────────────────────────────────
+# Disarm the watchdog only around the long write, then re-arm immediately so the
+# BMC is unprotected for the shortest possible window.
 
+wdt_disarm
 flashcp -v "${IMAGE_FILE}" "${PNOR_DEV}"
+wdt_rearm
 
 echo "bios-update: flash complete"
 

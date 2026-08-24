@@ -1,0 +1,75 @@
+From: Flax Advisors <support@flaxadvisors.com>
+Date: Fri, 14 Aug 2026 00:00:00 +0000
+Subject: [PATCH] hostiface: touch a stamp file after collection writes
+
+The collection receivers added in the previous patch persist the BIOS's
+inventory push but nothing tells the rest of the BMC that new data landed.
+Touch /var/lib/flax-inventory/collections/.updated after every member write
+and every group clear; flax-hi-inventory.path watches that file and runs the
+D-Bus translator, which is what puts the DIMMs and CPUs into Redfish.
+
+The stamp lives beside the group directories rather than inside one, so the
+DELETE-then-POST cycle (which does remove_all on the group) does not take the
+watched file out from under systemd.
+
+Upstream-Status: Inappropriate [platform integration]
+---
+ redfish-core/lib/flax_host_interface.hpp | 28 ++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/redfish-core/lib/flax_host_interface.hpp b/redfish-core/lib/flax_host_interface.hpp
+index 68ee640..e919bee 100644
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -509,6 +509,32 @@ inline std::string flaxCollectionDir(const std::string& group)
+     return std::string(flaxInvDirRoot) + "/collections/" + group;
+ }
+ 
++// Poke the stamp file flax-hi-inventory.path watches.  Failure here is not
++// worth failing the BIOS's push over: the translator also runs at boot, so a
++// missed trigger costs a delay, not the data.
++inline void flaxTouchInventoryStamp()
++{
++    std::error_code ec;
++    const std::string dir = std::string(flaxInvDirRoot) + "/collections";
++    std::filesystem::create_directories(dir, ec);
++
++    const std::string stamp = dir + "/.updated";
++    {
++        std::ofstream out(stamp, std::ofstream::out | std::ofstream::app);
++        if (!out)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: cannot touch {}", stamp);
++            return;
++        }
++    }
++    std::filesystem::last_write_time(
++        stamp, std::filesystem::file_time_type::clock::now(), ec);
++    if (ec)
++    {
++        BMCWEB_LOG_ERROR("flax-hi: cannot stamp {}: {}", stamp, ec.message());
++    }
++}
++
+ inline void handleFlaxCollectionDelete(
+     crow::App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -528,6 +554,7 @@ inline void handleFlaxCollectionDelete(
+     const std::string dir = flaxCollectionDir(group);
+     std::uintmax_t removed = std::filesystem::remove_all(dir, ec);
+     BMCWEB_LOG_ERROR("flax-hi: CLEAR {} ({} entries)", group, removed);
++    flaxTouchInventoryStamp();
+     asyncResp->res.result(boost::beast::http::status::no_content);
+ }
+ 
+@@ -608,6 +635,7 @@ inline void handleFlaxCollectionPost(
+ 
+     BMCWEB_LOG_ERROR("flax-hi: COLLECT {}/{} ({} bytes)", group, name,
+                      req.body().size());
++    flaxTouchInventoryStamp();
+     asyncResp->res.result(boost::beast::http::status::created);
+ }
+ 
+-- 
+2.34.1
+

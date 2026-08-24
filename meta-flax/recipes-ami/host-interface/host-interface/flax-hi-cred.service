@@ -1,0 +1,7 @@
+[Unit]
+Description=Sync the KCS-issued credential onto the host-interface accounts
+After=flax-hi-account.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flax-hi-account.sh setpw

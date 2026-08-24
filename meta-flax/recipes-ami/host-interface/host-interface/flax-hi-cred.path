@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch for the KCS-issued host-interface credential
+
+[Path]
+# The KCS NetFn 0x32 0x5d handler writes the generated password here when the
+# BIOS requests it during POST; sync it onto the host-interface accounts immediately.
+PathModified=/run/flax-hi-cred
+Unit=flax-hi-cred.service
+
+[Install]
+WantedBy=multi-user.target

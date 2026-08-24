@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 10 Aug 2026 21:50:00 +0000
+Subject: [PATCH] fbtp: add stepwise hysteresis to stop idle fan oscillation
+
+On an idle TiogaPass at ~25.5 C ambient the fans cycled between roughly 35% and
+70% on an ~8 second period, loud enough to be obvious across the room.
+
+It is not PID hunting.  Sampling the zone showed two exact discrete PWM values,
+89/255 (35%) and 178/255 (70%), which are two adjacent entries of the
+MB_INLET_TEMP_STP stepwise table:
+
+    Reading: 20 22 24 26 28 30 32 34 36 38  40
+    Output:  13 14 16 17 18 19 23 26 30 35  70
+
+MB_INLET_REMOTE_TEMP sits at 40.0 C and dithers +/-0.125 C, so every sample that
+crosses the last boundary flips the fans between 35% and 70%:
+
+    inlet=39.875 -> pwm 89      inlet=40.125 -> pwm 178
+    inlet=39.938 -> pwm 89      inlet=40.000 -> pwm 178
+
+Every stepwise controller in this config had PositiveHysteresis and
+NegativeHysteresis of 0, so there is nothing to suppress the flapping.  Give all
+seven 2.0 C of hysteresis, which is well outside the observed dither.  The other
+six (DTS_CPU*, DIMM_*) do not trigger at current temperatures -- their tables
+start at 73 C and 65 C -- but they have the same latent defect.
+
+Not addressed here, deliberately, as they are judgement calls rather than bugs:
+  - the last step is a cliff, 35% -> 70% in one 2 C move, where every other step
+    changes by 1-5 points;
+  - MB_INLET_REMOTE_TEMP reads ~40 C at 25.5 C ambient, a 14 C rise on an idle
+    machine, which suggests the sensor is not really at the inlet or is
+    miscalibrated.  If it reads high the whole table is shifted and the box runs
+    louder than designed at every ambient.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -559,7 +559,7 @@
+         "MB_INLET_REMOTE_TEMP"
+       ],
+       "Name": "MB_INLET_TEMP_STP",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         13.0,
+         14.0,
+@@ -573,7 +573,7 @@
+         35.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         20.0,
+         22.0,
+@@ -598,7 +598,7 @@
+         "DTS_CPU1"
+       ],
+       "Name": "DTS_CPU1_Stepwise",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         14.0,
+         16.0,
+@@ -606,7 +606,7 @@
+         22.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         73.0,
+         75.0,
+@@ -625,7 +625,7 @@
+         "DTS_CPU2"
+       ],
+       "Name": "DTS_CPU2_Stepwise",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         14.0,
+         16.0,
+@@ -633,7 +633,7 @@
+         22.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         73.0,
+         75.0,
+@@ -652,7 +652,7 @@
+         "DIMM_A1_CPU1"
+       ],
+       "Name": "DIMM_A1_CPU1",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         10.0,
+         20.0,
+@@ -660,7 +660,7 @@
+         50.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         65.0,
+         70.0,
+@@ -679,7 +679,7 @@
+         "DIMM_A1_CPU2"
+       ],
+       "Name": "DIMM_A1_CPU2",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         10.0,
+         20.0,
+@@ -687,7 +687,7 @@
+         50.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         65.0,
+         70.0,
+@@ -706,7 +706,7 @@
+         "DIMM_C1_CPU1"
+       ],
+       "Name": "DIMM_C1_CPU1",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         10.0,
+         20.0,
+@@ -714,7 +714,7 @@
+         50.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         65.0,
+         70.0,
+@@ -733,7 +733,7 @@
+         "DIMM_C1_CPU2"
+       ],
+       "Name": "DIMM_C1_CPU2",
+-      "NegativeHysteresis": 0,
++      "NegativeHysteresis": 2.0,
+       "Output": [
+         10.0,
+         20.0,
+@@ -741,7 +741,7 @@
+         50.0,
+         70.0
+       ],
+-      "PositiveHysteresis": 0,
++      "PositiveHysteresis": 2.0,
+       "Reading": [
+         65.0,
+         70.0,

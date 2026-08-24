@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 27 Jul 2026 00:00:00 +0000
+Subject: [PATCH] user_mgr: allow hyphen in usernames (HI-FW host interface)
+
+The AMI Redfish Host Interface firmware account is named "HI-FW" (fixed by
+the TP26 BIOS, which authenticates its inventory push as that user). AMI
+patch 0025 set the username validation regex to ^[a-zA-Z0-9_.*]{1,16}$,
+which forbids the hyphen, so CreateUser("HI-FW") fails with
+"Invalid username" and the account can never be provisioned. Add '-' to the
+allowed character class so the host-interface account can be created.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/user_mgr.cpp
++++ b/user_mgr.cpp
+@@ -319,7 +319,7 @@
+                               Argument::ARGUMENT_VALUE("Invalid length"));
+     }
+     if (!std::regex_match(userName.c_str(),
+-                          std::regex("^[a-zA-Z0-9_.*]{1,16}$")))
++                          std::regex("^[a-zA-Z0-9_.*-]{1,16}$")))
+     {
+         lg2::error("Invalid username '{USERNAME}'", "USERNAME", userName);
+         elog<InvalidArgument>(Argument::ARGUMENT_NAME("User name"),

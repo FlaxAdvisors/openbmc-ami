@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 10 Aug 2026 21:30:00 +0000
+Subject: [PATCH] usb: gadget: rndis: open the TX filter by default
+
+With the CDC Ethernet functional descriptor in place (patch 0021) the TP26 BIOS
+finally brings up its side of the Redfish Host Interface: it runs RNDIS_MSG_INIT
+during POST, self-assigns 169.254.0.18 and ARPs for the BMC.  But the link is
+receive-only -- usb0 shows RX 800 bytes / 22 packets and TX 0 -- so the ARP is
+never answered, no TCP reaches bmcweb, and the inventory push never starts.
+
+f_rndis leaves port.cdc_filter at 0 and relies on the host opening it via
+OID_GEN_CURRENT_PACKET_FILTER.  Linux does that; the BIOS never does -- it
+INIT/HALT-loops four times and then simply starts sending traffic.  While the
+filter is 0, u_ether's eth_start_xmit() drops every outgoing frame:
+
+	/* apply outgoing CDC or RNDIS filters */
+	if (skb && !is_promisc(cdc_filter)) { ... }
+
+Every other u_ether-based function (ecm, eem, ncm, subset) initialises the
+filter to DEFAULT_FILTER; RNDIS is the exception, and the existing REVISIT
+comment in rndis_set_alt() already notes this area has "done this wrong for a
+very long time".  Do the same here.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/drivers/usb/gadget/function/f_rndis.c
++++ b/drivers/usb/gadget/function/f_rndis.c
+@@ -603,7 +603,17 @@
+ 		 * very long time.  We need another call to the link layer
+ 		 * code -- gether_updown(...bool) maybe -- to do it right.
+ 		 */
+-		rndis->port.cdc_filter = 0;
++		/*
++		 * Open the transmit filter instead of waiting for the host to
++		 * set OID_GEN_CURRENT_PACKET_FILTER.  The TP26 UEFI RNDIS
++		 * driver never sends that OID -- it INIT/HALT-loops and then
++		 * starts sending ARP -- so with a zero filter u_ether's
++		 * eth_start_xmit() silently drops every reply and the link is
++		 * receive-only.  Every other u_ether function (ecm, eem, ncm,
++		 * subset) defaults to DEFAULT_FILTER; RNDIS is the odd one out,
++		 * as the REVISIT comment above concedes.
++		 */
++		rndis->port.cdc_filter = DEFAULT_FILTER;
+ 
+ 		DBG(cdev, "RNDIS RX/TX early activation ... \n");
+ 		net = gether_connect(&rndis->port);
+@@ -1041,8 +1051,9 @@
+ 
+ 	rndis->port.ioport = netdev_priv(opts->net);
+ 	mutex_unlock(&opts->lock);
+-	/* RNDIS activates when the host changes this filter */
+-	rndis->port.cdc_filter = 0;
++	/* RNDIS normally activates when the host changes this filter; open it
++	 * up front so a host that never sets it can still be replied to. */
++	rndis->port.cdc_filter = DEFAULT_FILTER;
+ 
+ 	/* RNDIS has special (and complex) framing */
+ 	rndis->port.header_len = sizeof(struct rndis_packet_msg_type);

@@ -1,0 +1,184 @@
+From: FlaxAdvisors
+Subject: add Flax Redfish Host Interface inventory receive endpoint
+
+Receive side of the AMI Redfish Host Interface inventory push.  After the KCS
+NetFn 0x32 bootstrap, the TP26 BIOS authenticates as HI-FW and POST/PUTs its
+inventory blob to an AMI OEM Redfish endpoint over the USB virtual NIC.  bmcweb
+owns :443 there, so the receiver lives here: parse the multipart/form-data file
+part, persist it to /var/lib/flax-inventory/inventory.json, and raise a
+transfer-complete flag for the translator (Phase 2).
+
+diff --git a/redfish-core/lib/flax_host_interface.hpp b/redfish-core/lib/flax_host_interface.hpp
+new file mode 100644
+index 00000000..994d466f
+--- /dev/null
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -0,0 +1,148 @@
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++
++// Receive side of the AMI Redfish Host Interface inventory push (Flax/TiogaPass).
++//
++// After the KCS NetFn 0x32 bootstrap (intel-ipmi-oem hostiface_inventory.cpp),
++// the TP26 BIOS authenticates as the HI-FW account and POST/PUTs its inventory
++// blob to an AMI OEM Redfish endpoint over the USB virtual NIC. bmcweb owns :443
++// on that interface, so the receiver lives here: we persist the uploaded blob and
++// raise a transfer-complete flag for the translator (Phase 2).
++//
++// The OEM handler (redfish-oem/oem/ami_hi/static-file-collection-hi.lua) takes a
++// multipart/form-data POST with a single file part (Content-Disposition filename)
++// and writes the part body to disk. We mirror that: extract the file part and
++// persist it as clean JSON, falling back to the raw body for a plain upload.
++//
++// See docs/redfish-inventory-netfn32-protocol.md and
++// docs/redfish-inventory-hi-discovery.md.
++
++#include "app.hpp"
++#include "async_resp.hpp"
++#include "error_messages.hpp"
++#include "http_request.hpp"
++#include "logging.hpp"
++#include "multipart_parser.hpp"
++#include "query.hpp"
++#include "registries/privilege_registry.hpp"
++
++#include <boost/beast/http/field.hpp>
++#include <boost/beast/http/status.hpp>
++#include <boost/beast/http/verb.hpp>
++
++#include <filesystem>
++#include <fstream>
++#include <string>
++#include <string_view>
++
++namespace redfish
++{
++
++inline void handleFlaxInventoryUpload(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    constexpr const char* invDir = "/var/lib/flax-inventory";
++
++    // The BIOS uploads multipart/form-data; a plain client may PUT a raw body.
++    std::string_view payload = req.body();
++    std::string extracted;
++
++    if (req.getHeaderValue(boost::beast::http::field::content_type)
++            .starts_with("multipart/form-data"))
++    {
++        MultipartParser parser;
++        ParserError perr = parser.parse(req);
++        if (perr != ParserError::PARSER_SUCCESS)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: multipart parse failed ({})",
++                             static_cast<int>(perr));
++            messages::unrecognizedRequestBody(asyncResp->res);
++            return;
++        }
++
++        // Prefer the part carrying a filename; otherwise take the first part.
++        const FormPart* filePart = nullptr;
++        for (const FormPart& part : parser.mime_fields)
++        {
++            boost::beast::http::fields::const_iterator it =
++                part.fields.find("Content-Disposition");
++            if (it != part.fields.end() &&
++                it->value().find("filename") != std::string_view::npos)
++            {
++                filePart = &part;
++                break;
++            }
++        }
++        if (filePart == nullptr && !parser.mime_fields.empty())
++        {
++            filePart = &parser.mime_fields.front();
++        }
++        if (filePart == nullptr)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: multipart upload had no file part");
++            messages::unrecognizedRequestBody(asyncResp->res);
++            return;
++        }
++        extracted = filePart->content;
++        payload = extracted;
++    }
++
++    BMCWEB_LOG_INFO("flax-hi: inventory upload received, {} bytes",
++                    payload.size());
++
++    std::error_code ec;
++    std::filesystem::create_directories(invDir, ec);
++
++    std::ofstream out(std::string(invDir) + "/inventory.json",
++                      std::ofstream::out | std::ofstream::binary |
++                          std::ofstream::trunc);
++    if (!out)
++    {
++        BMCWEB_LOG_ERROR("flax-hi: cannot open inventory file for write");
++        messages::internalError(asyncResp->res);
++        return;
++    }
++    out << payload;
++    out.close();
++
++    // Signal the translator (Phase 2) that a fresh inventory push landed.
++    std::ofstream flag(std::string(invDir) + "/transfer-complete",
++                       std::ofstream::out | std::ofstream::trunc);
++    flag << "1\n";
++    flag.close();
++
++    asyncResp->res.result(boost::beast::http::status::ok);
++}
++
++inline void requestRoutesFlaxHostInterface(App& app)
++{
++    // Collection POST + named-instance PUT for the BIOS's static-file upload,
++    // plus the AMI OEM InventoryData path as a fallback. All land the same blob.
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/BiosStaticFiles/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
++            std::bind_front(handleFlaxInventoryUpload, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/BiosStaticFiles/<str>/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post,
++                 boost::beast::http::verb::put)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& /*fileId*/) {
++                handleFlaxInventoryUpload(app, req, asyncResp);
++            });
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/InventoryData/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
++            std::bind_front(handleFlaxInventoryUpload, std::ref(app)));
++}
++
++} // namespace redfish
+diff --git a/redfish-core/src/redfish.cpp b/redfish-core/src/redfish.cpp
+index 707e5008..1cccf451 100644
+--- a/redfish-core/src/redfish.cpp
++++ b/redfish-core/src/redfish.cpp
+@@ -20,6 +20,7 @@
+ #include "eventservice_sse.hpp"
+ #include "fabric_adapters.hpp"
+ #include "fan_from_sensor.hpp"
++#include "flax_host_interface.hpp"
+ #include "fips_manager.hpp"
+ #include "fru.hpp"
+ #include "hypervisor_system.hpp"
+@@ -230,6 +231,7 @@ RedfishService::RedfishService(App& app)
+     requestRoutesChassisDrive(app);
+     requestRoutesChassisDriveName(app);
+     requestRoutesUpdateService(app);
++    requestRoutesFlaxHostInterface(app);
+     // requestRoutesStorageCollection(app);
+     // requestRoutesStorage(app);
+     requestRoutesStorageControllerCollection(app);

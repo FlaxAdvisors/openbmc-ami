@@ -11,3 +11,17 @@ bitbake-cookerdaemon.log
 
 .claude
 CLAUDE.md
+
+# ── Flax HI CA / BIOS trust-anchor swap — NEVER COMMIT ───────────────────────
+# The HI CA private key is a durable signing secret (losing it means re-flashing
+# BIOS with a new anchor). AMI CA material and the modified, non-distributable
+# AMI BIOS images must never enter this tree. The method tooling is kept local
+# (belongs in a private/internal repo, not this open-source one).
+flax-ca*.pem
+*-ca-key.pem
+ca-key.pem
+image-bios
+*_TPC_P26*.bin
+*flaxca*.bin
+*flax_TPC_P26*.bin
+tools/bios-ca-swap/

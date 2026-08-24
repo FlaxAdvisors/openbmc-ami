@@ -1,0 +1,76 @@
+From: Flax Advisors <hmccanne@exclamationpoint.com>
+Date: Mon, 17 Aug 2026 00:00:00 +0000
+Subject: [PATCH] fbtp: match the OEM fan failsafe and ramp rate
+
+Decoding the OEM's own fan table off its firmware
+(/mnt/oemroot/etc/defconfig/FanTable_TP_channel_V4_20201008.xml) showed our
+config is otherwise a faithful copy of it -- same sensor, same curve, no inlet
+correction -- but missing two of its damping mechanisms:
+
+    FSC Domain Profile   CfgPwm   0x3C = 60%      <- failsafe
+                         RampRate 0x14 = 20       <- slew limit
+    FSC Stepwise 0x00    NegativeHysteresis 1     <- added already in 0023
+
+Failsafe 100 -> 60.  Failsafe means "I cannot see temperatures", which on this
+platform happens with the host powered off or during boot before PECI comes up.
+Those are precisely the moments the machine is coldest and the CPUs are not
+working, so commanding 100% buys nothing and is the "loud at boot / loud when
+off" behaviour.  The OEM idles the same condition at 60%.
+
+Slew limits on the fan controllers, -20/+20 (output units per second, applied
+as lastOutput + slew*ts with ts = cycleIntervalTimeMS = 200 ms).  A 35% -> 70%
+step now takes ~1.75 s instead of snapping, and full speed is still reachable in
+under 5 s, which is far quicker than any thermal time constant here.  This is
+the OEM's RampRate, and it is a second, independent brake on oscillation:
+hysteresis stops the controller changing its mind, slew stops the fans slamming
+when it does.
+
+Deliberately NOT touched: the DTS_CPU*_Pid thermal controllers keep SlewNeg -1
+and SlewPos 0.0.  Zero on the positive side means no limit on ramping UP, so a
+CPU heating still gets an immediate fan response; only the fan channel output is
+rate limited.  Rate limiting the thermal controllers' rise would delay cooling a
+hot CPU, which is the one thing this must not do.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+ configurations/fbtp.json | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/configurations/fbtp.json b/configurations/fbtp.json
+index d75b1b0..3c7f64f 100644
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -470,8 +470,8 @@
+         "Pwm 1"
+       ],
+       "PCoefficient": 0.0,
+-      "SlewNeg": 0.0,
+-      "SlewPos": 0.0,
++      "SlewNeg": -20.0,
++      "SlewPos": 20.0,
+       "Type": "Pid",
+       "Zones": [
+         "Left"
+@@ -494,8 +494,8 @@
+         "Pwm 2"
+       ],
+       "PCoefficient": 0.0,
+-      "SlewNeg": 0.0,
+-      "SlewPos": 0.0,
++      "SlewNeg": -20.0,
++      "SlewPos": 20.0,
+       "Type": "Pid",
+       "Zones": [
+         "Left"
+@@ -548,7 +548,7 @@
+       ]
+     },
+     {
+-      "FailSafePercent": 100,
++      "FailSafePercent": 60,
+       "MinThermalOutput": 10,
+       "Name": "Left",
+       "Type": "Pid.Zone"
+-- 
+2.34.1
+

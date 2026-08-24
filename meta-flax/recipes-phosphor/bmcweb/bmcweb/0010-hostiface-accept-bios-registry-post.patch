@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Tue, 11 Aug 2026 17:55:00 +0000
+Subject: [PATCH] hostiface: accept the BIOS attribute registry POST
+
+A full request log of the TP26 BIOS's host-interface push (bmcweb built with
+-Dbmcweb-logging=debug, captured 2026-08-11) shows a POST we answer with 404:
+
+    POST /redfish/v1/Registries/BiosAttributeRegistryTPCH.0.52.0.json  404
+
+The OEM BMC answers this with 201.  The registry is worth keeping on its own
+merits: it describes every BIOS setup attribute, which is what a Redfish client
+needs in order to render /redfish/v1/Systems/<id>/Bios.
+
+The registry POST is handled by hooking requestRoutesMessageRegistryFile()
+rather than by adding a route.  bmcweb keys its routing trie by (path, method);
+/redfish/v1/Registries/<str>/ is ALREADY registered for POST/PATCH/DELETE by
+that function, and adding a second registration for the same (path, method)
+throws at startup -- bmcweb then core-dumps in a restart loop until systemd
+gives up, taking Redfish down completely.  Confirmed the hard way on hardware:
+
+    [CRITICAL routing.hpp:293] handler already exists for
+        "/redfish/v1/Registries/<str>/"
+    terminate called after throwing an instance of 'std::runtime_error'
+
+Note that the duplicate-registration check is compiled out when any of the AMI
+feature macros (BMCWEB_AMI_REP_MACRO and friends) are set, so this trap is
+invisible in some configurations and fatal in ours.
+
+The hook is scoped to registry names beginning "BiosAttributeRegistry", so the
+405/404 behaviour of every other registry is unchanged; previously such a POST
+fell through to resourceNotFound.
+
+DynamicExtension: DO NOT ANSWER THIS.
+-------------------------------------
+An earlier revision of this patch also added a route for
+
+    POST /redfish/v1/DynamicExtension/RedfishExtensions
+
+which the BIOS sends four times before anything else, and answered it 201 so
+the payloads could be captured.  That change made the host UNBOOTABLE.
+
+With the route in place the BIOS accepted the 201s, continued through the
+registry and static-file pushes, and then died in its own Redfish inventory
+driver at the firmware-layout push:
+
+    !!!! X64 Exception Type - 0D (#GP - General Protection) !!!!
+    ...\p26c\14203m\...\RfInventory\DEBUG\RfInventory.pdb
+
+POST code 98, BDS reached, never hands off to a boot device.  Reproduced on two
+different BIOS chips (both TPC_P26C), which is what proves it is the BMC side:
+the BIOS never changed.  With the earlier 404 behaviour (captured 2026-08-11)
+the BIOS tolerated the rejection and carried on -- it stopped early without
+pushing inventory, but it BOOTED.
+
+The OEM BMC does not serve this endpoint at all; it is absent from the OEM
+lighttpd access log entirely, so on the OEM the BIOS gets a 404 here and moves
+on.  Answering affirmatively appears to switch the BIOS onto an extension path
+it then faults on.  Matching the OEM means NOT answering.
+
+The four payloads are already captured under /var/lib/flax-inventory/dynext/
+from the run that crashed, so nothing is lost by reverting to 404.  If they are
+ever needed again, capture them with a passive proxy rather than by answering
+201 from bmcweb.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -214,6 +214,24 @@
+                      boost::beast::http::status::no_content);
+ }
+ 
++// The TP26 BIOS POSTs its BIOS attribute registry to
++//     POST /redfish/v1/Registries/BiosAttributeRegistryTPCH.0.52.0.json
++// and the OEM answers 201; we answered 404 (captured 2026-08-11).  Keep the
++// file -- it describes every BIOS setup attribute, which is what a Redfish
++// client needs to render /redfish/v1/Systems/<id>/Bios.
++//
++// This is called from message_registries.hpp rather than from a route of our
++// own: bmcweb keys its routing trie by (path, method), that path is already
++// registered for POST by requestRoutesMessageRegistryFile(), and registering
++// it twice aborts bmcweb at startup with "handler already exists".
++inline void handleFlaxRegistryUpload(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    handleFlaxUpload(app, req, asyncResp, "registry", "bios-registry.json",
++                     false, boost::beast::http::status::created);
++}
++
+ inline void handleFlaxBiosBlobUpload(
+     crow::App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+--- a/redfish-core/lib/message_registries.hpp
++++ b/redfish-core/lib/message_registries.hpp
+@@ -4,6 +4,7 @@
+ #pragma once
+ 
+ #include "app.hpp"
++#include "flax_host_interface.hpp"
+ #include "query.hpp"
+ #include "registries.hpp"
+ #include "registries/base_message_registry.hpp"
+@@ -560,6 +561,18 @@
+     {
+         return;
+     }
++    // The TP26 BIOS POSTs its BIOS attribute registry here, e.g.
++    //   POST /redfish/v1/Registries/BiosAttributeRegistryTPCH.0.52.0.json
++    // That name is not one of the built-in registries listed below, so it fell
++    // through to resourceNotFound and 404'd.  The OEM BMC answers 201.  Store
++    // it instead.  Scoped to the BiosAttributeRegistry prefix so the 405/404
++    // behaviour of every other registry is unchanged.
++    if (req.method() == boost::beast::http::verb::post &&
++        registry.starts_with("BiosAttributeRegistry"))
++    {
++        handleFlaxRegistryUpload(app, req, asyncResp);
++        return;
++    }
+     if (!membersResponseGet(asyncResp, registry, "MessageRegistryFileCollection"))
+     {
+         return;

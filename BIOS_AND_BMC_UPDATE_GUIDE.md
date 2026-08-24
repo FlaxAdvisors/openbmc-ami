@@ -21,6 +21,7 @@ Replace `<bmc-ip>` with the management IP of the BMC.
    - 5.1 [Web UI](#51-web-ui)
    - 5.2 [Redfish — Basic Auth](#52-redfish--basic-auth)
    - 5.3 [Redfish — Session Token](#53-redfish--session-token)
+   - 5.4 [BMC Shell (CLI)](#54-bmc-shell-cli)
 6. [Update Image on Backup EEPROM](#6-update-image-on-backup-eeprom)
 7. [Checking Active Firmware Versions](#7-checking-active-firmware-versions)
 8. [Troubleshooting](#8-troubleshooting)
@@ -206,6 +207,61 @@ curl -sk -X POST https://<bmc-ip>/redfish/v1/Systems/system/Actions/ComputerSyst
   -d '{"ResetType":"On"}'
 ```
 
+### 5.4 BMC Shell (CLI)
+
+The BIOS flash tool can be run directly from the BMC shell. This bypasses Redfish, the Web UI, the tar archive, and the payload allowlist entirely, so it is the most reliable path when an upload is being rejected and you need to know why — or when you simply do not want a web layer between you and the chip.
+
+The tool takes a **directory** containing a file named exactly `image-bios`. There is no tar and no `MANIFEST` on this path.
+
+1. Obtain a raw 32 MB BIOS image. If you only have a vendor update tar, extract the payload from it:
+
+   ```bash
+   mkdir -p /tmp/biosflash
+   tar -xOf tiogapass-bios-update.tar image-bios > /tmp/biosflash/image-bios
+   md5sum /tmp/biosflash/image-bios
+   ```
+
+2. Copy it onto the BMC. Use a scratch directory — **not** `/tmp/images`, which is watched by the image manager and will try to process the file as an update tar:
+
+   ```bash
+   ssh root@<bmc-ip> 'mkdir -p /tmp/biosflash'
+   scp /tmp/biosflash/image-bios root@<bmc-ip>:/tmp/biosflash/
+   ```
+
+3. Confirm the copy arrived intact, then flash:
+
+   ```bash
+   ssh root@<bmc-ip> 'md5sum /tmp/biosflash/image-bios'   # must match step 1
+   ssh root@<bmc-ip> '/sbin/bios-update /tmp/biosflash'
+   ```
+
+4. Clean up:
+
+   ```bash
+   ssh root@<bmc-ip> 'rm -rf /tmp/biosflash'
+   ```
+
+> **Always compare the md5 on both ends before flashing.** A truncated copy is silently accepted by the flash step and produces an unbootable host. This is a real failure mode on slow or proxied links.
+
+The file must be named `image-bios`. Any other name — including `bios.bin` — causes the tool to exit with `image not found: … (tar must contain 'image-bios')`.
+
+The tool performs the whole sequence itself and takes roughly **3 minutes**:
+
+```
+bios-update: powering off host
+bios-update: switching SPI mux to BMC (GPIO 621)
+bios-update: unbinding spi-aspeed-smc from 1e630000.spi
+bios-update: binding spi-aspeed-smc to 1e630000.spi
+bios-update: flashing /tmp/biosflash/image-bios → /dev/mtd5
+bios-update: flash complete
+bios-update: switching SPI mux back to PCH
+bios-update: powering on host (obmcutil poweron)
+```
+
+A cleanup trap returns the SPI bus to the host even if the tool fails partway, so an aborted run does not leave the host locked out of its own flash.
+
+**A closing `host state after power-on: Off` does not mean the flash failed.** The flash is already complete by that point; see [§8.5](#85-host-will-not-power-on-after-a-bios-update).
+
 ---
 
 ## 6. Update Image on Backup EEPROM
@@ -351,3 +407,46 @@ curl -sk -u root:0penBmc \
 **Symptom:** After a successful BIOS flash, the host fails to power on through the Web UI or Redfish.
 
 **Fix:** Perform a full AC power cycle of the chassis (unplug the system, wait 30 seconds, plug it back in). The BIOS flash path can leave the PSU in a state that only an AC cycle clears. Soft power-on works normally after that.
+
+A BMC restart, a front-panel power button press, and a Redfish reset are **not** substitutes — only real AC removal clears it. On the BMC, every attempt logs the same signature:
+
+```
+power-control: Host0: Moving to "Wait for Power Supply Power OK" state
+power-control: power supply power OK watchdog timer expired
+power-control: PowerControl: power supply power good failed to assert
+```
+
+Seeing this after a flash that reported `flash complete` means the flash succeeded and the PSU is the only thing standing in the way. Do not re-flash in response to it.
+
+### 8.6 Upload is rejected with an internal error, and no flash starts
+
+**Symptom:** The Web UI reports failure, or Redfish returns HTTP 500:
+
+```json
+{ "code": "Base.1.19.InternalError",
+  "message": "The request failed due to an internal service error.  The service is still operational." }
+```
+
+**Cause:** The uploaded file is not a valid update package. bmcweb reports the backend rejection as a generic internal error, so the real reason is only visible in the BMC journal:
+
+```bash
+ssh root@<bmc-ip> 'journalctl -t phosphor-version-software-manager -n 30 --no-pager'
+```
+
+Two distinct causes produce this, with different journal lines:
+
+| Journal line | Cause | Fix |
+|---|---|---|
+| `Uploaded file …/<name> is not a valid Firmware file` | The tar is valid but the payload member has the wrong name. Only `image-bmc`, `image-bios`, `image-cpld`, `image-pldm`, `image-raid`, `MANIFEST`, `publickey` and their `.sig` counterparts are accepted — a member named `bios.bin` is rejected. | Repackage with the payload named `image-bios`, or flash from the shell per [§5.4](#54-bmc-shell-cli). |
+| `tar: invalid tar magic` → `Failed (256) to untar file` | The uploaded file is not a tar at all — usually a raw `.bin` BIOS image selected directly in the Web UI. | Upload the `.tar` package, not the raw image. To use a raw `.bin`, flash from the shell per [§5.4](#54-bmc-shell-cli). |
+
+Inspect a package before uploading it:
+
+```bash
+tar -tf tiogapass-bios-update.tar
+# expected:
+#   image-bios
+#   MANIFEST
+```
+
+A package whose listing shows `bios.bin` will never flash through the Web UI or Redfish, no matter how many times it is retried.

@@ -1,0 +1,313 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Fri, 31 Jul 2026 17:00:00 +0000
+Subject: [PATCH] hostiface: correct the BiosStaticFiles path, serve InventoryData GET
+
+Captured from the OEM MegaRAC BMC on 2026-07-31 by enabling lighttpd access
+logging and running a real host POST, the BIOS's host-interface conversation is:
+
+    GET   /redfish/v1/
+    GET   /redfish/v1/Oem/Ami/InventoryData
+    GET   /redfish/v1/Systems/Self/SecureBoot/Actions/SecureBoot.ResetKeys
+    (those three repeat once)
+    POST  /redfish/v1/Registries/BiosAttributeRegistryTPCH.0.52.0.json
+    POST  /redfish/v1/BiosStaticFiles
+    POST  /redfish/v1/Systems/Self/Bios          (x2)
+    POST  /redfish/v1/Oem/Ami/InventoryData
+    PATCH /redfish/v1/Oem/Ami/InventoryData
+
+Two corrections fall out of that:
+
+1. The bulk blob goes to the TOP-LEVEL /redfish/v1/BiosStaticFiles, not
+   /redfish/v1/Oem/Ami/BiosStaticFiles.  The Oem/Ami form exists in the OEM's
+   Lua route table -- which is where we originally took it from -- but it is
+   not the path the BIOS actually posts to, so our receiver would have 404'd.
+
+2. The BIOS GETs /Oem/Ami/InventoryData before pushing, and PATCHes it after.
+   We only handled POST/PUT.  The GET is how the BIOS learns which inventory
+   groups the BMC already holds: a per-group CRC table, CPU/PCIE/DIMM -> uint32,
+   held on the OEM in redis under Redfish:oem:ami:inventory:crc:GroupCrcList.
+
+   The groups have to be NAMED.  An empty GroupCrcList is not read as "I hold
+   nothing, send everything" -- captured on hardware 2026-08-11, the BIOS
+   answered an empty list by pushing the BIOS attribute blob and the setup
+   static files and then stopping, never sending the POST/PATCH of
+   /redfish/v1/Oem/Ami/InventoryData that carry the CPU/DIMM/PCIe data.  With
+   no group names there is nothing to compare its CRCs against, so nothing
+   reads as stale.  We therefore list the same three groups as the OEM and
+   report CRC 0 for each, which can never match a real CRC, so every group is
+   always stale and the BIOS always sends a full push.  That is what we want:
+   we do not cache inventory.
+
+Routes are registered both with and without a trailing slash because the BIOS
+sends none.
+
+---
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -38,9 +38,41 @@
+ namespace redfish
+ {
+ 
+-inline void handleFlaxInventoryUpload(
++// Strip any directory component and anything unusual out of a filename the host
++// gave us; we never want a BIOS-supplied string to escape the drop directory.
++inline std::string flaxSafeName(std::string_view raw, const char* fallback)
++{
++    size_t slash = raw.find_last_of("/\\");
++    if (slash != std::string_view::npos)
++    {
++        raw.remove_prefix(slash + 1);
++    }
++    std::string out;
++    for (char c : raw)
++    {
++        if (isalnum(static_cast<unsigned char>(c)) != 0 || c == '.' || c == '-' ||
++            c == '_')
++        {
++            out.push_back(c);
++        }
++    }
++    if (out.empty() || out == "." || out == "..")
++    {
++        return fallback;
++    }
++    return out;
++}
++
++// The BIOS pushes several different artefacts over the host interface (see the
++// captured OEM sequence): the inventory blob itself, a BIOS attribute registry,
++// BIOS settings, and one or more "static files".  They must land in separate
++// files -- writing them all to inventory.json means the last upload silently
++// clobbers the inventory we actually want.
++inline void handleFlaxUpload(
+     crow::App& app, const crow::Request& req,
+-    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& subdir, const char* defaultName, bool markComplete,
++    boost::beast::http::status okStatus)
+ {
+     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+     {
+@@ -52,6 +84,7 @@
+     // The BIOS uploads multipart/form-data; a plain client may PUT a raw body.
+     std::string_view payload = req.body();
+     std::string extracted;
++    std::string partName = defaultName;
+ 
+     if (req.getHeaderValue(boost::beast::http::field::content_type)
+             .starts_with("multipart/form-data"))
+@@ -91,43 +124,182 @@
+         }
+         extracted = filePart->content;
+         payload = extracted;
++
++        // Honour the filename the BIOS supplied, as the OEM receiver does.
++        boost::beast::http::fields::const_iterator it =
++            filePart->fields.find("Content-Disposition");
++        if (it != filePart->fields.end())
++        {
++            std::string_view cd = it->value();
++            size_t fn = cd.find("filename=");
++            if (fn != std::string_view::npos)
++            {
++                std::string_view name = cd.substr(fn + 9);
++                if (!name.empty() && name.front() == '"')
++                {
++                    name.remove_prefix(1);
++                    size_t end = name.find('"');
++                    if (end != std::string_view::npos)
++                    {
++                        name = name.substr(0, end);
++                    }
++                }
++                partName = flaxSafeName(name, defaultName);
++            }
++        }
+     }
+ 
+-    BMCWEB_LOG_INFO("flax-hi: inventory upload received, {} bytes",
+-                    payload.size());
++    std::string dir = std::string(invDir);
++    if (!subdir.empty())
++    {
++        dir += "/" + subdir;
++    }
++
++    BMCWEB_LOG_ERROR("flax-hi: UPLOAD {}/{} ({} bytes)", subdir, partName,
++                     payload.size());
+ 
+     std::error_code ec;
+-    std::filesystem::create_directories(invDir, ec);
++    std::filesystem::create_directories(dir, ec);
+ 
+-    std::ofstream out(std::string(invDir) + "/inventory.json",
++    std::ofstream out(dir + "/" + partName,
+                       std::ofstream::out | std::ofstream::binary |
+                           std::ofstream::trunc);
+     if (!out)
+     {
+-        BMCWEB_LOG_ERROR("flax-hi: cannot open inventory file for write");
++        BMCWEB_LOG_ERROR("flax-hi: cannot open {}/{} for write", dir, partName);
+         messages::internalError(asyncResp->res);
+         return;
+     }
+     out << payload;
+     out.close();
+ 
+-    // Signal the translator (Phase 2) that a fresh inventory push landed.
+-    std::ofstream flag(std::string(invDir) + "/transfer-complete",
+-                       std::ofstream::out | std::ofstream::trunc);
+-    flag << "1\n";
+-    flag.close();
++    if (markComplete)
++    {
++        // Signal the translator (Phase 2) that a fresh inventory push landed.
++        std::ofstream flag(std::string(invDir) + "/transfer-complete",
++                           std::ofstream::out | std::ofstream::trunc);
++        flag << "1\n";
++        flag.close();
++    }
++
++    asyncResp->res.result(okStatus);
++}
++
++// The inventory blob itself -- this is the one the translator consumes.
++inline void handleFlaxInventoryUpload(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    handleFlaxUpload(app, req, asyncResp, "", "inventory.json", true,
++                     boost::beast::http::status::created);
++}
++
++// BIOS "static files", the attribute registry and BIOS settings: keep them, but
++// well away from inventory.json.
++inline void handleFlaxStaticFileUpload(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    handleFlaxUpload(app, req, asyncResp, "static", "biosstaticfile.bin",
++                     false, boost::beast::http::status::created);
++}
++
++// The BIOS PATCHes InventoryData after the push; the OEM answers 204.  Keep the
++// body separately so it can never clobber inventory.json.
++inline void handleFlaxInventoryPatch(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    handleFlaxUpload(app, req, asyncResp, "", "inventory-patch.json", false,
++                     boost::beast::http::status::no_content);
++}
++
++inline void handleFlaxBiosBlobUpload(
++    crow::App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    handleFlaxUpload(app, req, asyncResp, "bios", "bios-blob.bin", false,
++                     boost::beast::http::status::no_content);
++}
++
++// The BIOS reads this before deciding what to push.  It is how the OEM BMC
++// reports which inventory groups it already holds: a per-group CRC table,
++// backed on the OEM by the redis key
++// Redfish:oem:ami:inventory:crc:GroupCrcList, e.g.
++//     "GroupCrcList": {"DIMM": 2764192848, "CPU": 3032237160,
++//                      "PCIE": 3797810510}
++// (see /vagrant/oem-reference/protocol-reverse/inventory.json).
++//
++// We must NAME the groups.  An empty object is not "I have nothing, send
++// everything" -- captured 2026-08-11, against an empty GroupCrcList the BIOS
++// pushed the BIOS attribute blob and the setup static files and then stopped,
++// never sending POST/PATCH /redfish/v1/Oem/Ami/InventoryData, which are the
++// requests that carry the CPU/DIMM/PCIe data.  With no group names there is
++// nothing for it to compare its own CRCs against, so nothing reads as stale
++// and nothing gets pushed.
++//
++// So list the groups the OEM lists and report a CRC that cannot match a real
++// one.  Every group then always reads as stale and the BIOS pushes all of
++// them.  That is deliberate: we do not cache inventory, so we always want a
++// full push.  If we ever do cache it, replace the zeros with the real CRC of
++// what we hold.
++inline void handleFlaxInventoryDataGet(
++    App& app, const crow::Request& req,
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
+ 
++    asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/Oem/Ami/InventoryData";
++    asyncResp->res.jsonValue["@odata.type"] =
++        "#AMIInventoryData.v1_0_0.AMIInventoryData";
++    asyncResp->res.jsonValue["Id"] = "InventoryData";
++    asyncResp->res.jsonValue["Name"] = "Inventory Data";
++    BMCWEB_LOG_ERROR(
++        "flax-hi: GET InventoryData (zero CRCs -> ask for a full push)");
++    nlohmann::json::object_t groupCrcList;
++    groupCrcList["CPU"] = 0;
++    groupCrcList["DIMM"] = 0;
++    groupCrcList["PCIE"] = 0;
++    asyncResp->res.jsonValue["GroupCrcList"] = std::move(groupCrcList);
+     asyncResp->res.result(boost::beast::http::status::ok);
+ }
+ 
+ inline void requestRoutesFlaxHostInterface(App& app)
+ {
++    // The BIOS posts the bulk blob to the TOP-LEVEL /redfish/v1/BiosStaticFiles
++    // (confirmed 2026-07-31 from the OEM BMC's lighttpd access log during a real
++    // POST -- the /Oem/Ami/... form appears in the OEM Lua route table but is
++    // NOT what the BIOS uses).  bmcweb normalises the trailing slash, so this
++    // one registration matches the BIOS's slash-less request too; registering
++    // both forms for the same verb aborts bmcweb at startup ("handler already
++    // exists").
++    BMCWEB_ROUTE(app, "/redfish/v1/BiosStaticFiles")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
++            std::bind_front(handleFlaxStaticFileUpload, std::ref(app)));
++
++    // The BIOS POSTs its BIOS settings blob to /redfish/v1/Systems/Self/Bios
++    // before it will push inventory.  bmcweb registers the Bios GET under the
++    // LITERAL "system" id, so this parameterised POST does not collide, and
++    // <str> matches the "Self" id the BIOS uses.
++    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Bios")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
++            [&app](const crow::Request& req,
++                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++                   const std::string& /*systemId*/) {
++                handleFlaxBiosBlobUpload(app, req, asyncResp);
++            });
++
+     // Collection POST + named-instance PUT for the BIOS's static-file upload,
+     // plus the AMI OEM InventoryData path as a fallback. All land the same blob.
+     BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/BiosStaticFiles/")
+         .privileges(redfish::privileges::postUpdateService)
+         .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
+-            std::bind_front(handleFlaxInventoryUpload, std::ref(app)));
++            std::bind_front(handleFlaxStaticFileUpload, std::ref(app)));
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/BiosStaticFiles/<str>/")
+         .privileges(redfish::privileges::postUpdateService)
+@@ -136,13 +308,18 @@
+             [&app](const crow::Request& req,
+                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                    const std::string& /*fileId*/) {
+-                handleFlaxInventoryUpload(app, req, asyncResp);
++                handleFlaxStaticFileUpload(app, req, asyncResp);
+             });
+ 
+     BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/InventoryData/")
+         .privileges(redfish::privileges::postUpdateService)
+         .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
+             std::bind_front(handleFlaxInventoryUpload, std::ref(app)));
++
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/InventoryData/")
++        .privileges(redfish::privileges::postUpdateService)
++        .methods(boost::beast::http::verb::patch)(
++            std::bind_front(handleFlaxInventoryPatch, std::ref(app)));
+ }
+ 
+ } // namespace redfish

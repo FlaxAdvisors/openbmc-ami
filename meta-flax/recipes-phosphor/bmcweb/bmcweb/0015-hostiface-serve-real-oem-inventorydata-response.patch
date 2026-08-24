@@ -1,0 +1,583 @@
+From: Flax Advisors <support@flaxadvisors.com>
+Date: Sun, 17 Aug 2026 00:00:00 +0000
+Subject: [PATCH] hostiface: serve the real OEM InventoryData response
+
+Rewrites the InventoryData GET against the response captured off the OEM chip
+on 2026-08-17, and teaches the POST receiver to normalize an OEM push into the
+collection layout the translator already reads.
+
+THE BUG THAT COST THREE HOST CRASHES: every earlier version of this handler
+modelled the response on protocol-reverse/inventory.json -- but that file is
+the BIOS's POST *payload*, not the BMC's GET *response*.  We were replying with
+the shape of the request, and the BIOS's RfInventory driver walked a document
+with none of the fields it expected and #GP'd at a constant RIP.  The real
+response is a normal Redfish document (@odata.*, BiosStaticFiles, Chassis, DRE,
+NetworkDeviceFunctions, Registries, SecureBoot, System) whose group CRCs live
+at System.Oem.Ami.Inventory.Crc.GroupCrcList as an ARRAY of one-key objects,
+not the flat object the payload uses.  Reference:
+/vagrant/oem-reference/live-2026-08-17/hi-InventoryData.json
+
+Two deliberate divergences from the OEM body, both following the rule this file
+already learned the hard way -- never advertise something you do not serve.
+SecureBoot is omitted, because the OEM advertises #SecureBoot.ResetKeys and its
+BIOS then GETs that action target; we cannot reproduce that 154-byte response,
+and the previous code advertised it anyway pointing at a route we do not have.
+DRE and NetworkDeviceFunctions are present but empty, since an empty array is
+dereferenceable while a missing key may not be.
+
+The kill switch is INVERTED to an explicit enable.  It used to be a "disable"
+file that had to be present to be safe, which meant an rwfs erase silently
+re-armed the dangerous path; absent the enable file we now answer 405, which is
+the behaviour proven to boot.  A companion flag allows the GET from the
+management LAN so the generated body can be diffed against the captured
+reference without booting the host.
+
+BiosStaticFiles now carries a real CRC32 per stored asset.  That is what stops
+the BIOS re-uploading all seven files every boot: it compares and uploads only
+what changed.  Being wrong here merely costs a re-upload; being absent is what
+is expensive.
+
+GroupCrcList is remembered, never computed.  The BIOS ships it in its push and
+the BMC's only job is to echo it back -- established from the capture, and it
+retires the idea that we had to reverse a CRC algorithm.  Zeros mean we hold
+nothing, which reads as stale for every group and asks for a full push.
+
+The normalizer merges per group and never replaces wholesale: a steady-state
+boot sends an 850-byte delta with no Memory, Processors or PCIe at all, so
+wiping a group because the payload omits it would erase the inventory on the
+first no-change boot.  Per-item schemas are byte-identical between the OEM
+payload and the generic-Redfish fallback, so flax-hi-inventory publishes this
+with no changes.
+
+This route stays disabled by default.  Enabling it is a deliberate act and
+still wants the offline body diff first.
+
+Upstream-Status: Inappropriate [platform integration]
+---
+ redfish-core/lib/flax_host_interface.hpp | 461 ++++++++++++++++-------
+ 1 file changed, 326 insertions(+), 135 deletions(-)
+
+diff --git a/redfish-core/lib/flax_host_interface.hpp b/redfish-core/lib/flax_host_interface.hpp
+index e919bee..2f1b861 100644
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -30,6 +30,9 @@
+ #include <boost/beast/http/status.hpp>
+ #include <boost/beast/http/verb.hpp>
+ 
++#include <sys/stat.h>
++
++#include <array>
+ #include <filesystem>
+ #include <fstream>
+ #include <string>
+@@ -80,13 +83,28 @@ inline std::string flaxSafeName(std::string_view raw, const char* fallback)
+ // password is obtainable over KCS by any host-side software.  The transport
+ // check is what actually carries the security here.
+ 
+-// TEMPORARY SCAFFOLDING -- remove once the boot sequence is proven stable.
+ // Serving the InventoryData GET is the only known way to make the host
+-// unbootable (BIOS #GP in RfInventory).  Touching this file makes the GET
+-// answer 405 again, recovering the box with one ssh command and a host power
+-// cycle instead of a rebuild + reflash.
+-constexpr const char* flaxGetKillSwitch =
+-    "/var/lib/flax-inventory/disable-inventorydata-get";
++// unbootable (BIOS #GP in RfInventory), so it is OPT-IN: absent this file we
++// answer 405, which is the behaviour proven to boot.  Deleting the file and
++// power-cycling the host recovers the box with one ssh command instead of a
++// rebuild + reflash.
++//
++// This used to be inverted -- a "disable" file that had to be present to be
++// safe -- which meant an rwfs erase silently re-armed the dangerous path.  An
++// explicit enable is correct after any wipe.
++constexpr const char* flaxGetEnableFlag =
++    "/var/lib/flax-inventory/enable-inventorydata-get";
++
++// Debug affordance: lets the GET be fetched from the management LAN so the
++// generated body can be diffed against the captured OEM reference without
++// booting the host.  Off unless the file exists; remove it after testing.
++constexpr const char* flaxGetLanAllowFlag =
++    "/var/lib/flax-inventory/allow-lan-inventorydata-get";
++
++// Per-group CRCs, exactly as the BIOS sent them in its last push.  We do not
++// compute these -- see flaxNormalizeOemInventory().
++constexpr const char* flaxGroupCrcFile =
++    "/var/lib/flax-inventory/groupcrc.json";
+ 
+ // Largest upload we will store.  /var here is a ~19 MB overlay and the real
+ // inventory payload is ~74 KB; without a cap one oversized POST fills the BMC's
+@@ -287,12 +305,127 @@ inline void handleFlaxUpload(
+ }
+ 
+ // The inventory blob itself -- this is the one the translator consumes.
++// Split one OEM push into the per-group collection files the translator
++// already consumes.  The per-item schemas are byte-identical between the OEM
++// payload and the generic-Redfish fallback (verified against the 2026-08-17
++// capture), so flax-hi-inventory needs no changes at all to publish this.
++//
++// MERGE, NEVER REPLACE.  A steady-state boot sends an 850-byte delta carrying
++// only GroupCrcList and static identity -- no Memory, Processors or PCIe at
++// all.  Wiping a group because this payload does not mention it would erase
++// the inventory on the first no-change boot.  (The OEM makes exactly this
++// distinction: its 850-byte delta overwrote the stored inventory.json while
++// its redis still held all 25 PCIe devices.)
++inline void flaxTouchInventoryStamp(); // defined with the collection receivers
++
++inline void flaxNormalizeOemInventory()
++{
++    // Read what handleFlaxUpload just persisted rather than the request body:
++    // the BIOS posts multipart/form-data, and the upload path has already
++    // extracted the file part for us.
++    std::ifstream in("/var/lib/flax-inventory/inventory.json");
++    if (!in)
++    {
++        BMCWEB_LOG_ERROR("flax-hi: no stored inventory.json to normalize");
++        return;
++    }
++    nlohmann::json payload = nlohmann::json::parse(in, nullptr, false);
++    if (payload.is_discarded() || !payload.is_object())
++    {
++        BMCWEB_LOG_ERROR("flax-hi: OEM push is not JSON -- kept raw only");
++        return;
++    }
++
++    std::error_code ec;
++    const std::string root = "/var/lib/flax-inventory/collections";
++
++    auto writeGroup = [&](const std::string& group,
++                          const nlohmann::json& items,
++                          const char* idKey) {
++        if (!items.is_array() || items.empty())
++        {
++            return; // group absent from this push: keep what we have
++        }
++        const std::string dir = root + "/" + group;
++        std::filesystem::remove_all(dir, ec);
++        std::filesystem::create_directories(dir, ec);
++
++        size_t index = 0;
++        for (const auto& item : items)
++        {
++            std::string name = std::to_string(index);
++            if (idKey != nullptr && item.is_object())
++            {
++                auto id = item.find(idKey);
++                if (id != item.end() && id->is_string())
++                {
++                    name = flaxSafeName(id->get<std::string>(), name.c_str());
++                }
++            }
++            const std::string path = dir + "/" + name + ".json";
++            std::ofstream out(path, std::ofstream::out | std::ofstream::trunc);
++            if (out)
++            {
++                out << item.dump();
++            }
++            ++index;
++        }
++        BMCWEB_LOG_ERROR("flax-hi: OEM push -> {} ({} members)", group,
++                         items.size());
++    };
++
++    const auto& systems = payload["Systems"];
++    if (systems.is_array() && !systems.empty())
++    {
++        const auto& sys = systems[0];
++        writeGroup("memory", sys.value("Memory", nlohmann::json::array()),
++                   nullptr);
++        writeGroup("processors",
++                   sys.value("Processors", nlohmann::json::array()), nullptr);
++    }
++
++    const auto& chassisList = payload["Chassis"];
++    if (chassisList.is_array() && !chassisList.empty())
++    {
++        const auto& links = chassisList[0].value("Links", nlohmann::json());
++        if (links.is_object())
++        {
++            writeGroup("pcie",
++                       links.value("PCIeDevices", nlohmann::json::array()),
++                       "Id");
++        }
++    }
++
++    // Remember the CRCs verbatim.  The BIOS computes them; we only echo them
++    // back on the next GET so it can skip groups that have not changed.
++    const auto& crcs = payload["GroupCrcList"];
++    if (crcs.is_object())
++    {
++        std::ofstream out(flaxGroupCrcFile,
++                          std::ofstream::out | std::ofstream::trunc);
++        if (out)
++        {
++            out << crcs.dump();
++            BMCWEB_LOG_ERROR("flax-hi: stored GroupCrcList {}", crcs.dump());
++        }
++    }
++
++    // Wake the translator (same stamp the collection receivers touch).
++    flaxTouchInventoryStamp();
++}
++
+ inline void handleFlaxInventoryUpload(
+     crow::App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+ {
+     handleFlaxUpload(app, req, asyncResp, "", "inventory.json", true,
+                      boost::beast::http::status::created);
++
++    // Only normalize a push we actually accepted.
++    if (asyncResp->res.result() == boost::beast::http::status::created)
++    {
++        flaxNormalizeOemInventory();
++    }
+ }
+ 
+ // BIOS "static files", the attribute registry and BIOS settings: keep them, but
+@@ -323,27 +456,123 @@ inline void handleFlaxBiosBlobUpload(
+                      boost::beast::http::status::no_content);
+ }
+ 
+-// The BIOS reads this before deciding what to push.  It is how the OEM BMC
+-// reports which inventory groups it already holds: a per-group CRC table,
+-// backed on the OEM by the redis key
+-// Redfish:oem:ami:inventory:crc:GroupCrcList, e.g.
+-//     "GroupCrcList": {"DIMM": 2764192848, "CPU": 3032237160,
+-//                      "PCIE": 3797810510}
+-// (see /vagrant/oem-reference/protocol-reverse/inventory.json).
++// What the BIOS reads before deciding what to push, and the single most
++// dangerous route we serve.
++//
++// THE BUG THAT COST THREE HOST CRASHES: every earlier attempt modelled this
++// response on /vagrant/oem-reference/protocol-reverse/inventory.json -- but
++// that file is the BIOS's POST *payload*, not the BMC's GET *response*.  We
++// were replying with the shape of the request.  The BIOS's RfInventory driver
++// walked a document with none of the fields it expected and #GP'd at a
++// constant RIP.
+ //
+-// We must NAME the groups.  An empty object is not "I have nothing, send
+-// everything" -- captured 2026-08-11, against an empty GroupCrcList the BIOS
+-// pushed the BIOS attribute blob and the setup static files and then stopped,
+-// never sending POST/PATCH /redfish/v1/Oem/Ami/InventoryData, which are the
+-// requests that carry the CPU/DIMM/PCIe data.  With no group names there is
+-// nothing for it to compare its own CRCs against, so nothing reads as stale
+-// and nothing gets pushed.
++// The real response was captured 2026-08-17 off the OEM chip and is
++// /vagrant/oem-reference/live-2026-08-17/hi-InventoryData.json (4135 bytes).
++// It is a normal Redfish document -- @odata.*, BiosStaticFiles, Chassis, DRE,
++// NetworkDeviceFunctions, Registries, SecureBoot, System -- and the group CRCs
++// live at System.Oem.Ami.Inventory.Crc.GroupCrcList as an ARRAY of one-key
++// objects, not the flat object the push payload uses.  Mirror it.
+ //
+-// So list the groups the OEM lists and report a CRC that cannot match a real
+-// one.  Every group then always reads as stale and the BIOS pushes all of
+-// them.  That is deliberate: we do not cache inventory, so we always want a
+-// full push.  If we ever do cache it, replace the zeros with the real CRC of
+-// what we hold.
++// Two deliberate divergences from the OEM body, both following the rule this
++// file already learned the hard way -- never advertise something you do not
++// serve:
++//
++//   - SecureBoot is OMITTED.  The OEM advertises #SecureBoot.ResetKeys and its
++//     BIOS then GETs that action target (200, 154 bytes).  We cannot reproduce
++//     that response, and the previous code advertised the action anyway with a
++//     target under /Systems/system/... that we do not route.  Omitting the
++//     block means the BIOS never asks.
++//   - DRE and NetworkDeviceFunctions are present but EMPTY.  We run no dynamic
++//     extensions and hold no host NIC data.  An empty array is dereferenceable;
++//     a missing key may not be.
++inline uint32_t flaxCrc32(const unsigned char* data, size_t len)
++{
++    // CRC-32/ISO-HDLC, the variant the OEM's BiosStaticFiles table uses.
++    static std::array<uint32_t, 256> table = [] {
++        std::array<uint32_t, 256> t{};
++        for (uint32_t i = 0; i < 256; i++)
++        {
++            uint32_t c = i;
++            for (int k = 0; k < 8; k++)
++            {
++                c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
++            }
++            t[i] = c;
++        }
++        return t;
++    }();
++
++    uint32_t c = 0xFFFFFFFFU;
++    for (size_t i = 0; i < len; i++)
++    {
++        c = table[(c ^ data[i]) & 0xFFU] ^ (c >> 8);
++    }
++    return c ^ 0xFFFFFFFFU;
++}
++
++// CRC of every BIOS static asset we hold.  Advertising these is what stops the
++// BIOS re-uploading all seven files on every boot: it compares and uploads only
++// what changed.  A CRC that does not match simply costs a re-upload, so being
++// wrong here is safe -- being absent is what is expensive.
++inline nlohmann::json::object_t flaxBiosStaticFileCrcs()
++{
++    nlohmann::json::object_t crcs;
++    std::error_code ec;
++    const std::string dir = "/var/lib/flax-inventory/static";
++    for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
++    {
++        if (!entry.is_regular_file(ec))
++        {
++            continue;
++        }
++        std::ifstream in(entry.path(), std::ios::binary);
++        if (!in)
++        {
++            continue;
++        }
++        std::string content((std::istreambuf_iterator<char>(in)),
++                            std::istreambuf_iterator<char>());
++        crcs[entry.path().filename().string()] = flaxCrc32(
++            reinterpret_cast<const unsigned char*>(content.data()),
++            content.size());
++    }
++    return crcs;
++}
++
++// The CRCs the BIOS itself sent us last time.  We never compute these: the
++// BIOS ships GroupCrcList in its push and the BMC's job is only to remember it
++// (established from the OEM capture, 2026-08-17).  Zeros mean "we hold
++// nothing", which reads as stale for every group and asks for a full push.
++inline void flaxGroupCrcList(nlohmann::json::array_t& out)
++{
++    uint64_t cpu = 0;
++    uint64_t pcie = 0;
++    uint64_t dimm = 0;
++
++    std::ifstream in(flaxGroupCrcFile);
++    if (in)
++    {
++        nlohmann::json stored = nlohmann::json::parse(in, nullptr, false);
++        if (!stored.is_discarded() && stored.is_object())
++        {
++            cpu = stored.value("CPU", uint64_t{0});
++            pcie = stored.value("PCIE", uint64_t{0});
++            dimm = stored.value("DIMM", uint64_t{0});
++        }
++    }
++
++    // Order and one-key-per-object shape both copied from the OEM body.
++    nlohmann::json::object_t cpuEntry;
++    cpuEntry["CPU"] = cpu;
++    nlohmann::json::object_t pcieEntry;
++    pcieEntry["PCIE"] = pcie;
++    nlohmann::json::object_t dimmEntry;
++    dimmEntry["DIMM"] = dimm;
++    out.emplace_back(std::move(cpuEntry));
++    out.emplace_back(std::move(pcieEntry));
++    out.emplace_back(std::move(dimmEntry));
++}
++
+ inline void handleFlaxInventoryDataGet(
+     App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+@@ -353,128 +582,90 @@ inline void handleFlaxInventoryDataGet(
+         return;
+     }
+ 
+-    // TEMPORARY: bail out to the known-safe 405 if the kill switch exists.
+-    std::error_code kec;
+-    if (std::filesystem::exists(flaxGetKillSwitch, kec))
++    std::error_code ec;
++    if (!std::filesystem::exists(flaxGetEnableFlag, ec))
+     {
++        // The proven-to-boot answer.  With 405 here the BIOS falls back to
++        // generic Redfish collection POSTs, which patch 0013 receives.
+         BMCWEB_LOG_WARNING(
+-            "flax-hi: GET InventoryData disabled by kill switch -> 405");
++            "flax-hi: GET InventoryData not enabled -> 405 (fallback path)");
+         asyncResp->res.result(
+             boost::beast::http::status::method_not_allowed);
+         return;
+     }
+ 
+-    // The body must be a BARE object with exactly GroupCrcList / Systems /
+-    // Chassis, mirroring the OEM
+-    // (/vagrant/oem-reference/protocol-reverse/inventory.json).
+-    //
+-    // NO @odata.id / @odata.type / Id / Name.  The OEM does not send them, and
+-    // that Redfish boilerplate is the one structural difference that survived
+-    // every earlier attempt to make this route safe -- patch 0011 added
+-    // Systems/Chassis but kept the boilerplate and the BIOS still #GP'd.
+-    //
+-    // Answering this GET at all is what steers the BIOS onto the OEM push path
+-    // (one POST of the whole inventory here) instead of the generic Redfish
+-    // fallback (DELETE/POST on Systems/system/Memory etc).  Getting the body
+-    // wrong makes the host unbootable -- see flaxGetKillSwitch.
+-    BMCWEB_LOG_ERROR("flax-hi: GET InventoryData (OEM shape, zero CRCs)");
+-
+-    nlohmann::json::object_t groupCrcList;
+-    // Zero can never match a real CRC, so every group reads as stale and the
+-    // BIOS pushes all of them.  Deliberate: we do not cache inventory.
+-    groupCrcList["DIMM"] = 0;
+-    groupCrcList["CPU"] = 0;
+-    groupCrcList["PCIE"] = 0;
+-
+-    nlohmann::json::object_t status;
+-    status["State"] = "Enabled";
+-    status["Health"] = "OK";
+-    status["HealthRollup"] = "OK";
+-
+-    nlohmann::json::object_t tpmStatus;
+-    tpmStatus["State"] = "Enabled";
+-    nlohmann::json::object_t tpm;
+-    tpm["FirmwareVersion"] = "7.62";
+-    tpm["FirmwareVersion2"] = "12.13824";
+-    tpm["InterfaceType"] = "TPM2_0";
+-    tpm["InterfaceTypeSelection"] = "BiosSetting";
+-    tpm["Status"] = tpmStatus;
+-    nlohmann::json::array_t trustedModules;
+-    trustedModules.emplace_back(std::move(tpm));
+-
+-    // TODO: source these from D-Bus (UUID from
+-    // xyz.openbmc_project.Common.UUID, serial/SKU/manufacturer from the
+-    // baseboard FRU, BiosVersion from bios_active).  Literals for now so this
+-    // change tests exactly one variable -- whether dropping the Redfish
+-    // boilerplate is what stops the BIOS crashing.
+-    nlohmann::json::object_t system;
+-    system["Manufacturer"] = "Quanta";
+-    system["SerialNumber"] = "Default string";
+-    system["SKU"] = "Default string";
+-    system["BiosVersion"] = "TPC_P26C";
+-    system["UUID"] = "00000000-0000-0000-0000-000000000000";
+-    system["Status"] = status;
+-    system["TrustedModules"] = std::move(trustedModules);
+-    nlohmann::json::array_t systems;
+-    systems.emplace_back(std::move(system));
++    if (!flaxIsHostInterfaceClient(req) &&
++        !std::filesystem::exists(flaxGetLanAllowFlag, ec))
++    {
++        messages::insufficientPrivilege(asyncResp->res);
++        return;
++    }
++
++    BMCWEB_LOG_ERROR("flax-hi: GET InventoryData (OEM response shape)");
+ 
++    // Mirrors the OEM's URIs, including its "Self" system id.  The BIOS does
++    // not GET these links -- its whole request set is /redfish/v1, this
++    // resource and SecureBoot.ResetKeys -- so they are descriptive only.
+     nlohmann::json::object_t chassis;
+-    chassis["Manufacturer"] = "Quanta";
+-    chassis["SerialNumber"] = "Default string";
+-    chassis["SKU"] = "Default string";
+-    chassis["ChassisType"] = "RackMount";
+-    chassis["Status"] = status;
+-    nlohmann::json::array_t chassisList;
+-    chassisList.emplace_back(std::move(chassis));
+-
+-    // ---- the remaining manifest members -------------------------------------
+-    // This response is a CAPABILITY MANIFEST, not a stub.  The OEM handler
+-    // (redfish-oem/oem/ami_hi/hi-inventory-data.lua, LuaJIT bytecode -- read its
+-    // string table) assembles SEVEN members, and RfInventory walks the ones it
+-    // names.  Declaring only Systems/Chassis left the BIOS reaching for members
+-    // that were not there, which is the null-deref shape (RAX=0, RCX=0) at a
+-    // constant RIP that we saw on every crash.
+-    //
+-    // Where we have nothing to advertise we emit the member PRESENT BUT EMPTY.
+-    // An empty array is dereferenceable; a missing key is not.  It also avoids
+-    // provoking the follow-up requests we would then have to serve -- advertise
+-    // a DRE instance and the BIOS GETs that GUID straight back (patch 0010's
+-    // lesson: never advertise something you do not serve).
+-
+-    // SecureBoot: the OEM advertises the ResetKeys action here, which is why its
+-    // BIOS fetches SecureBoot.ResetKeys and ours never did.
+-    nlohmann::json::object_t resetKeys;
+-    resetKeys["target"] =
+-        "/redfish/v1/Systems/system/SecureBoot/Actions/SecureBoot.ResetKeys";
+-    resetKeys["@Redfish.ActionInfo"] =
+-        "/redfish/v1/Systems/system/SecureBoot/ResetKeysActionInfo";
+-    nlohmann::json::object_t sbActions;
+-    sbActions["#SecureBoot.ResetKeys"] = std::move(resetKeys);
+-
+-    nlohmann::json::object_t secureBoot;
+-    secureBoot["@odata.id"] = "/redfish/v1/Systems/system/SecureBoot";
+-    secureBoot["SecureBootEnable"] = false;
+-    secureBoot["SecureBootMode"] = "SetupMode";
+-    secureBoot["SecureBootCurrentBoot"] = "Disabled";
+-    secureBoot["Actions"] = std::move(sbActions);
+-
+-    // Registries / DRE / NetworkDeviceFunctions: present, empty.
+-    nlohmann::json::object_t registries;
+-    registries["Members"] = nlohmann::json::array_t();
+-
+-    nlohmann::json::object_t biosStaticFiles;
+-    biosStaticFiles["Running"] = false;
+-    biosStaticFiles["Md5Checksum"] = "";
+-
+-    asyncResp->res.jsonValue["GroupCrcList"] = std::move(groupCrcList);
+-    asyncResp->res.jsonValue["Systems"] = std::move(systems);
+-    asyncResp->res.jsonValue["Chassis"] = std::move(chassisList);
+-    asyncResp->res.jsonValue["SecureBoot"] = std::move(secureBoot);
+-    asyncResp->res.jsonValue["Registries"] = std::move(registries);
++    chassis["@odata.id"] = "/redfish/v1/Chassis/Self";
++    chassis["NetworkAdapters"]["@odata.id"] =
++        "/redfish/v1/Chassis/Self/NetworkAdapters";
++    chassis["Thermal"]["@odata.id"] = "/redfish/v1/Chassis/Self/Thermal";
++
++    nlohmann::json::array_t groupCrcList;
++    flaxGroupCrcList(groupCrcList);
++
++    nlohmann::json::object_t crc;
++    crc["@odata.id"] = "/redfish/v1/Systems/Self/Oem/Ami/Inventory/Crc";
++    crc["GroupCrcList"] = std::move(groupCrcList);
++
++    nlohmann::json::object_t system;
++    system["@odata.id"] = "/redfish/v1/Systems/Self";
++    system["Id"] = "Self";
++    system["Bios"]["@odata.id"] = "/redfish/v1/Systems/Self/Bios";
++    system["EthernetInterfaces"]["@odata.id"] =
++        "/redfish/v1/Systems/Self/EthernetInterfaces";
++    system["LogServices"]["@odata.id"] =
++        "/redfish/v1/Systems/Self/LogServices";
++    system["Memory"]["@odata.id"] = "/redfish/v1/Systems/Self/Memory";
++    system["MemoryDomains"]["@odata.id"] =
++        "/redfish/v1/Systems/Self/MemoryDomains";
++    system["NetworkInterfaces"]["@odata.id"] =
++        "/redfish/v1/Systems/Self/NetworkInterfaces";
++    system["Processors"]["@odata.id"] = "/redfish/v1/Systems/Self/Processors";
++    system["SimpleStorage"]["@odata.id"] =
++        "/redfish/v1/Systems/Self/SimpleStorage";
++    system["Storage"]["@odata.id"] = "/redfish/v1/Systems/Self/Storage";
++    system["Oem"]["Ami"]["Inventory"]["Crc"] = std::move(crc);
++
++    nlohmann::json::object_t boot;
++    boot["BootOptions"]["@odata.id"] = "/redfish/v1/Systems/Self/BootOptions";
++    boot["BootSourceOverrideEnabled"] = "Disabled";
++    boot["BootSourceOverrideMode"] = "Legacy";
++    boot["BootSourceOverrideTarget"] = "None";
++    system["Boot"] = std::move(boot);
++
++    // The etag the OEM sends is W/"<LastModified epoch>".
++    std::string etag = "W/\"0\"";
++    struct stat st{};
++    if (::stat(flaxGroupCrcFile, &st) == 0)
++    {
++        etag = "W/\"" + std::to_string(static_cast<uint64_t>(st.st_mtime)) +
++               "\"";
++    }
++
++    asyncResp->res.jsonValue["@odata.context"] = "/redfish/v1/$metadata";
++    asyncResp->res.jsonValue["@odata.etag"] = etag;
++    asyncResp->res.jsonValue["@odata.id"] =
++        "/redfish/v1/Oem/Ami/InventoryData";
++    asyncResp->res.jsonValue["BiosStaticFiles"] = flaxBiosStaticFileCrcs();
++    asyncResp->res.jsonValue["Chassis"] = std::move(chassis);
+     asyncResp->res.jsonValue["DRE"] = nlohmann::json::array_t();
+     asyncResp->res.jsonValue["NetworkDeviceFunctions"] =
+         nlohmann::json::array_t();
+-    asyncResp->res.jsonValue["BiosStaticFiles"] = std::move(biosStaticFiles);
++    asyncResp->res.jsonValue["Registries"]["Members"] =
++        nlohmann::json::array_t();
++    asyncResp->res.jsonValue["System"] = std::move(system);
+     asyncResp->res.result(boost::beast::http::status::ok);
+ }
+ 
+-- 
+2.34.1
+

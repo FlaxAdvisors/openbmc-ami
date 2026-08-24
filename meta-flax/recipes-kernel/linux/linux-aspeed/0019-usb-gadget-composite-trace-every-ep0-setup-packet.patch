@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 10 Aug 2026 19:30:00 +0000
+Subject: [PATCH] usb: gadget: composite: trace every ep0 setup packet via
+ dynamic debug
+
+Diagnostic for the Redfish Host Interface inventory push.  The TP26 BIOS
+enumerates our RNDIS gadget during POST and issues SET_CONFIGURATION -- the
+gadget logs "high-speed config #1" -- but then never sends RNDIS_MSG_INIT and
+abandons the host-interface push ~25s later.  usb0 sees zero ethernet frames in
+either direction.  The same device is bound and fully initialised by Linux
+40 seconds later, so the descriptors themselves are acceptable to a normal
+RNDIS host.
+
+To find what the BIOS asks for between SET_CONFIGURATION and giving up we need
+the ep0 conversation.  Upstream composite_setup() logs only the *non-core*
+requests, and only under VDBG, which is gated on the VERBOSE_DEBUG compile-time
+switch -- unusable on a production kernel.
+
+Log every setup packet with DBG() (dev_dbg), which costs nothing unless enabled
+at runtime, and promote the existing non-core VDBG to DBG for the same reason.
+
+Enable at runtime with:
+  echo 'file drivers/usb/gadget/composite.c +p' > \
+      /sys/kernel/debug/dynamic_debug/control
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/drivers/usb/gadget/composite.c
++++ b/drivers/usb/gadget/composite.c
+@@ -1788,6 +1788,16 @@
+ 	struct usb_function		*iter;
+ 	u8				endp;
+ 
++	/*
++	 * Trace every ep0 setup packet.  Upstream only logs the non-core
++	 * requests, and only under VDBG (VERBOSE_DEBUG), which is a compile-time
++	 * switch -- so there is no way to see what a host actually asks for on a
++	 * production kernel.  dev_dbg() keeps this free unless it is turned on at
++	 * runtime via dynamic_debug.
++	 */
++	DBG(cdev, "ep0-setup req%02x.%02x v%04x i%04x l%d\n",
++	    ctrl->bRequestType, ctrl->bRequest, w_value, w_index, w_length);
++
+ 	if (w_length > USB_COMP_EP0_BUFSIZ) {
+ 		if (ctrl->bRequestType & USB_DIR_IN) {
+ 			/* Cast away the const, we are going to overwrite on purpose. */
+@@ -2200,7 +2210,7 @@
+ 			goto check_value;
+ 		}
+ 
+-		VDBG(cdev,
++		DBG(cdev,
+ 			"non-core control req%02x.%02x v%04x i%04x l%d\n",
+ 			ctrl->bRequestType, ctrl->bRequest,
+ 			w_value, w_index, w_length);

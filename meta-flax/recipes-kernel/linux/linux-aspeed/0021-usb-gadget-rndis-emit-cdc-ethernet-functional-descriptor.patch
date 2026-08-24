@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Mon, 10 Aug 2026 20:40:00 +0000
+Subject: [PATCH] usb: gadget: rndis: emit the CDC Ethernet Networking
+ functional descriptor
+
+The TP26 BIOS enumerates our RNDIS gadget during POST, issues
+SET_CONFIGURATION, reads the configuration and the string descriptors, then
+re-reads the configuration twice and abandons the Redfish Host Interface
+without ever sending RNDIS_MSG_INIT (ep0 trace, patch 0019).  Linux binds the
+same device seconds later, so it is specifically the UEFI driver that refuses.
+
+The OEM MegaRAC gadget this BIOS does accept is eth.ko (extracted from
+WTPC_P407.ima).  Its CreateEthernetDescriptor error strings enumerate exactly
+what it builds:
+
+  Device Desc, Cfg Desc, Interface Desc, CDC Header Desc,
+  CDC Call Management Desc, CDC ACM Desc, CDC Union Desc,
+  ECM ETH Desc,                              <-- we do not emit this
+  IN EndPointDesc, BULK OUT/IN EndPointDesc
+
+and it renders the MAC into a string with "%02X%02X%02X%02X%02X%02X" -- the
+iMACAddress that the Ethernet Networking functional descriptor references.
+
+Stock f_rndis omits the descriptor deliberately: an RNDIS host is expected to
+learn the MAC from an OID_802_3_PERMANENT_ADDRESS query instead.  A UEFI driver
+that reads it from the configuration cannot bind without it, which matches the
+observed "read config, re-read config, give up" behaviour.
+
+Emit it, with the MAC exposed as a string, as f_ecm already does.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/drivers/usb/gadget/function/f_rndis.c
++++ b/drivers/usb/gadget/function/f_rndis.c
+@@ -70,6 +70,8 @@
+ 	struct gether			port;
+ 	u8				ctrl_id, data_id;
+ 	u8				ethaddr[ETH_ALEN];
++	/* MAC rendered as a USB string for the CDC Ethernet descriptor */
++	char				mac_str[14];
+ 	u32				vendorID;
+ 	const char			*manufacturer;
+ 	struct rndis_params		*params;
+@@ -141,6 +143,27 @@
+ 	/* .bSlaveInterface0 =	DYNAMIC */
+ };
+ 
++/*
++ * CDC Ethernet Networking functional descriptor.  Stock f_rndis does not emit
++ * one -- an RNDIS host learns the MAC by querying OID_802_3_PERMANENT_ADDRESS
++ * instead -- but the AMI/MegaRAC gadget that the TP26 BIOS accepts does emit
++ * it (its CreateEthernetDescriptor has an "Error in creating ECM ETH Desc"
++ * path and renders the MAC into a string with "%02X%02X%02X%02X%02X%02X").
++ * A UEFI RNDIS driver that takes the MAC from the descriptor rather than from
++ * an OID query cannot bind without this.
++ */
++static struct usb_cdc_ether_desc rndis_ether_desc = {
++	.bLength =		sizeof(rndis_ether_desc),
++	.bDescriptorType =	USB_DT_CS_INTERFACE,
++	.bDescriptorSubType =	USB_CDC_ETHERNET_TYPE,
++
++	/* .iMACAddress = DYNAMIC */
++	.bmEthernetStatistics =	cpu_to_le32(0), /* no statistics */
++	.wMaxSegmentSize =	cpu_to_le16(ETH_FRAME_LEN),
++	.wNumberMCFilters =	cpu_to_le16(0),
++	.bNumberPowerFilters =	0,
++};
++
+ /* the data interface has two bulk endpoints */
+ 
+ static struct usb_interface_descriptor rndis_data_intf = {
+@@ -206,6 +229,7 @@
+ 	(struct usb_descriptor_header *) &call_mgmt_descriptor,
+ 	(struct usb_descriptor_header *) &rndis_acm_descriptor,
+ 	(struct usb_descriptor_header *) &rndis_union_desc,
++	(struct usb_descriptor_header *) &rndis_ether_desc,
+ 	(struct usb_descriptor_header *) &fs_notify_desc,
+ 
+ 	/* data interface has no altsetting */
+@@ -254,6 +278,7 @@
+ 	(struct usb_descriptor_header *) &call_mgmt_descriptor,
+ 	(struct usb_descriptor_header *) &rndis_acm_descriptor,
+ 	(struct usb_descriptor_header *) &rndis_union_desc,
++	(struct usb_descriptor_header *) &rndis_ether_desc,
+ 	(struct usb_descriptor_header *) &hs_notify_desc,
+ 
+ 	/* data interface has no altsetting */
+@@ -321,6 +346,7 @@
+ 	(struct usb_descriptor_header *) &call_mgmt_descriptor,
+ 	(struct usb_descriptor_header *) &rndis_acm_descriptor,
+ 	(struct usb_descriptor_header *) &rndis_union_desc,
++	(struct usb_descriptor_header *) &rndis_ether_desc,
+ 	(struct usb_descriptor_header *) &ss_notify_desc,
+ 	(struct usb_descriptor_header *) &ss_intr_comp_desc,
+ 
+@@ -339,6 +365,7 @@
+ 	[0].s = "RNDIS Communications Control",
+ 	[1].s = "RNDIS Ethernet Data",
+ 	[2].s = "RNDIS",
++	[3].s = NULL,		/* DYNAMIC: MAC for the CDC Ethernet descriptor */
+ 	{  } /* end of list */
+ };
+ 
+@@ -697,6 +724,17 @@
+ 		rndis_opts->bound = true;
+ 	}
+ 
++	/*
++	 * Render the host-side MAC as a USB string so the CDC Ethernet
++	 * descriptor can point at it.  Must happen before the strings are
++	 * attached, since it supplies rndis_string_defs[3].
++	 */
++	status = gether_get_host_addr_cdc(rndis_opts->net, rndis->mac_str,
++					  sizeof(rndis->mac_str));
++	if (status < 12)
++		goto fail;
++	rndis_string_defs[3].s = rndis->mac_str;
++
+ 	us = usb_gstrings_attach(cdev, rndis_strings,
+ 				 ARRAY_SIZE(rndis_string_defs));
+ 	if (IS_ERR(us)) {
+@@ -706,6 +744,7 @@
+ 	rndis_control_intf.iInterface = us[0].id;
+ 	rndis_data_intf.iInterface = us[1].id;
+ 	rndis_iad_descriptor.iFunction = us[2].id;
++	rndis_ether_desc.iMACAddress = us[3].id;
+ 
+ 	/* allocate instance-specific interface IDs */
+ 	status = usb_interface_id(c, f);

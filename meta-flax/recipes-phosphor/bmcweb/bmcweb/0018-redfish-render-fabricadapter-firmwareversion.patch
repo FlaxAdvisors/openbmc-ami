@@ -1,0 +1,62 @@
+From: Flax Advisors <support@flaxadvisors.com>
+Date: Sun, 17 Aug 2026 00:00:00 +0000
+Subject: [PATCH] redfish: render FabricAdapter.FirmwareVersion
+
+Same gap as PCIeDevice: the schema carries FirmwareVersion and bmcweb never
+populated it.  For a NIC the adapter is the more natural place to look for it
+than the PCIe device, so populate both from Decorator.Revision.
+
+Upstream-Status: Pending
+
+---
+ redfish-core/lib/fabric_adapters.hpp | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/redfish-core/lib/fabric_adapters.hpp b/redfish-core/lib/fabric_adapters.hpp
+index a0ecb6f..f02c13d 100644
+--- a/redfish-core/lib/fabric_adapters.hpp
++++ b/redfish-core/lib/fabric_adapters.hpp
+@@ -162,6 +162,32 @@ inline void getFabricAdapterHealth(
+         });
+ }
+ 
++// Adapter firmware.  FabricAdapter carries FirmwareVersion in the schema, and
++// for a NIC it is the natural home for it -- the TP26 BIOS reports the
++// Mellanox ConnectX-4 Lx as 14.27.26.06 over the host interface.  Published by
++// flax-hi-inventory on Decorator.Revision, the same interface bmcweb already
++// reads for a processor's Version.
++inline void getFabricAdapterRevision(
++    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
++    const std::string& serviceName, const std::string& fabricAdapterPath)
++{
++    dbus::utility::getProperty<std::string>(
++        serviceName, fabricAdapterPath,
++        "xyz.openbmc_project.Inventory.Decorator.Revision", "Version",
++        [asyncResp](const boost::system::error_code& ec,
++                    const std::string& version) {
++            if (ec)
++            {
++                // Adapters whose firmware version is unknown simply omit it.
++                return;
++            }
++            if (!version.empty())
++            {
++                asyncResp->res.jsonValue["FirmwareVersion"] = version;
++            }
++        });
++}
++
+ inline void doAdapterGet(
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+     const std::string& systemName, const std::string& adapterId,
+@@ -181,6 +207,7 @@ inline void doAdapterGet(
+ 
+     getFabricAdapterLocation(asyncResp, serviceName, fabricAdapterPath);
+     getFabricAdapterAsset(asyncResp, serviceName, fabricAdapterPath);
++    getFabricAdapterRevision(asyncResp, serviceName, fabricAdapterPath);
+     getFabricAdapterState(asyncResp, serviceName, fabricAdapterPath);
+     getFabricAdapterHealth(asyncResp, serviceName, fabricAdapterPath);
+ }
+-- 
+2.34.1
+

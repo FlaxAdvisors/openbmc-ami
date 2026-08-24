@@ -18,6 +18,10 @@ SRC_URI:append = " file://0017-Add-tiogapass-configs-to-meson.patch"
 #  0020 - gate CPU/PCH VR voltage sensors on host PowerState (no SEL spam when host off)
 #  0021 - gate main (P3V3/P5V/P12V ADC) + INA230 12V rails on host PowerState
 #  0022 - raise fan TACH upper non-critical threshold 8500 -> 9500 RPM (quiet flapping)
+#  0023 - add 2C stepwise hysteresis; idle fans oscillated 35%<->70% because
+#         MB_INLET_REMOTE_TEMP dithers on the 40C step boundary with no hysteresis
+#  0024 - match the OEM's other two damping mechanisms: failsafe 100->60% and
+#         fan-channel slew limits (its CfgPwm 0x3C and RampRate 0x14)
 # (Board-level Decorator.Ipmi was dropped: entity-manager's global.json schema
 #  sets additionalProperties:false on boards and does not permit Decorator.Ipmi,
 #  so EM strips it. The ipmid SDR CPU storm is fixed by the intel-ipmi-oem
@@ -27,6 +31,8 @@ SRC_URI:append = " file://0019-fbtp-convert-HSC-sensors-to-native-PMBus-reindent
 SRC_URI:append = " file://0020-fbtp-gate-VR-voltage-sensors-on-host-power-state.patch"
 SRC_URI:append = " file://0021-fbtp-gate-main-and-INA230-rails-on-host-power-state.patch"
 SRC_URI:append = " file://0022-fbtp-raise-fan-tach-upper-noncritical-to-9500.patch"
+SRC_URI:append = " file://0023-fbtp-add-stepwise-hysteresis-to-stop-fan-oscillation.patch"
+SRC_URI:append = " file://0024-fbtp-match-oem-failsafe-and-ramp-rate.patch"
 
 #RDEPENDS_${PN} += "default-fru"
 

@@ -1,0 +1,354 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Thu, 13 Aug 2026 16:30:00 +0000
+Subject: [PATCH] hostiface: OEM-shaped InventoryData GET + host-interface-only
+ gate
+
+Design: docs/superpowers/specs/2026-08-13-hi-inventorydata-oem-path-design.md
+Evidence: /vagrant/oem-reference/protocol-reverse/FINDINGS-2026-08-13-real-inventory-endpoints.md
+
+The TP26 BIOS has two inventory-push modes, and our answer to
+GET /redfish/v1/Oem/Ami/InventoryData selects which one it uses:
+
+    200 + OEM-shaped body -> OEM path: one POST of the whole inventory (~74 KB)
+                             to Oem/Ami/InventoryData, then a PATCH
+    405                   -> fallback: generic DELETE/POST on
+                             Systems/system/Memory, /Processors,
+                             Chassis/Cpld/PCIeDevices (all 405/404 on us)
+    200 + our old body    -> #GP in RfInventory, host never boots
+
+Captured 2026-08-13 with -Dbmcweb-logging=debug against a booting host, and
+cross-checked against the OEM's own lighttpd access log from 2026-07-31.
+
+Take the OEM path.  It needs one correct GET body plus the POST/PATCH handlers
+we already have, rather than registering new verbs on three collection paths
+upstream bmcweb owns for GET (which trips the "handler already exists" abort
+documented in patch 0010).  It also yields one atomic payload instead of
+fragmented per-member POSTs.
+
+The GET body is now a BARE object with exactly GroupCrcList / Systems /
+Chassis.  No @odata.id / @odata.type / Id / Name -- the OEM sends none of that,
+and the boilerplate is the one structural difference that survived every
+earlier attempt: patch 0011 added Systems/Chassis but kept it and the BIOS
+still crashed.  This change isolates that single variable.
+
+Systems/Chassis values are literals for now, with a TODO to source them from
+D-Bus.  Deliberate: it keeps this change to one variable while we find out
+whether the boilerplate was the crash.
+
+Also hardens the receive side:
+
+  - Host-interface-only gate on every mutating route.  Requires BOTH the peer
+    being in 169.254.0.0/16 (a prefix that exists only on usb0 -- a forged
+    source from the management LAN cannot complete the handshake, since replies
+    route out usb0) AND the authenticated user being HostAutoFW or HI-FW.
+    Identity alone is weak here: those accounts carry priv-admin and their
+    password is obtainable over KCS by any host-side software, so the transport
+    check is what carries the security.  Failure -> 403 InsufficientPrivilege.
+
+  - 2 MB upload cap -> 413.  /var is a ~19 MB overlay and the real payload is
+    ~74 KB; without a cap one oversized POST fills the BMC's writable storage.
+
+  - Write-then-rename, so a truncated transfer can never present itself to the
+    Phase 2 translator as complete.
+
+  - TEMPORARY kill switch: the GET returns 405 if
+    /var/lib/flax-inventory/disable-inventorydata-get exists.  Serving this
+    route is the only known way to make the host unbootable; the switch turns
+    recovery from rebuild+reflash into one ssh command and a power cycle.
+    REMOVE once the boot sequence is proven stable.
+
+Signed-off-by: Flax <hmccanne@exclamationpoint.com>
+---
+--- a/redfish-core/lib/flax_host_interface.hpp
++++ b/redfish-core/lib/flax_host_interface.hpp
+@@ -63,6 +63,71 @@
+     return out;
+ }
+ 
++// ---------------------------------------------------------------------------
++// Host-interface gate.
++//
++// The mutating routes below must only be reachable by the BIOS over the USB
++// host interface -- never by a Redfish client on the management network.  We
++// require BOTH:
++//
++//   transport: the peer is in 169.254.0.0/16.  That prefix lives only on usb0
++//              (169.254.0.17 ours, 169.254.0.18 the BIOS).  A forged source
++//              from the management LAN cannot complete the TCP handshake --
++//              replies to 169.254.x.x route out usb0, not back to eth0.
++//   identity:  the authenticated user is one of the HI firmware accounts.
++//
++// Identity alone would be weak: those accounts carry priv-admin and their
++// password is obtainable over KCS by any host-side software.  The transport
++// check is what actually carries the security here.
++
++// TEMPORARY SCAFFOLDING -- remove once the boot sequence is proven stable.
++// Serving the InventoryData GET is the only known way to make the host
++// unbootable (BIOS #GP in RfInventory).  Touching this file makes the GET
++// answer 405 again, recovering the box with one ssh command and a host power
++// cycle instead of a rebuild + reflash.
++constexpr const char* flaxGetKillSwitch =
++    "/var/lib/flax-inventory/disable-inventorydata-get";
++
++// Largest upload we will store.  /var here is a ~19 MB overlay and the real
++// inventory payload is ~74 KB; without a cap one oversized POST fills the BMC's
++// writable storage.
++constexpr size_t flaxMaxUploadBytes = 2u * 1024u * 1024u;
++
++inline bool flaxIsHostInterfaceClient(const crow::Request& req)
++{
++    boost::asio::ip::address addr = req.ipAddress;
++    if (addr.is_v6() && addr.to_v6().is_v4_mapped())
++    {
++        addr = boost::asio::ip::make_address_v4(boost::asio::ip::v4_mapped,
++                                                addr.to_v6());
++    }
++    bool onHostLink = false;
++    if (addr.is_v4())
++    {
++        onHostLink = (addr.to_v4().to_uint() & 0xFFFF0000u) == 0xA9FE0000u;
++    }
++    if (!onHostLink)
++    {
++        BMCWEB_LOG_WARNING("flax-hi: refusing {} -- not on the host interface",
++                           req.ipAddress.to_string());
++        return false;
++    }
++
++    if (req.session == nullptr)
++    {
++        BMCWEB_LOG_WARNING("flax-hi: refusing -- no authenticated session");
++        return false;
++    }
++    const std::string& user = req.session->username;
++    if (user != "HostAutoFW" && user != "HI-FW")
++    {
++        BMCWEB_LOG_WARNING("flax-hi: refusing user '{}' -- not an HI account",
++                           user);
++        return false;
++    }
++    return true;
++}
++
+ // The BIOS pushes several different artefacts over the host interface (see the
+ // captured OEM sequence): the inventory blob itself, a BIOS attribute registry,
+ // BIOS settings, and one or more "static files".  They must land in separate
+@@ -81,6 +146,21 @@
+ 
+     constexpr const char* invDir = "/var/lib/flax-inventory";
+ 
++    // Only the BIOS, over the host interface.  See flaxIsHostInterfaceClient.
++    if (!flaxIsHostInterfaceClient(req))
++    {
++        messages::insufficientPrivilege(asyncResp->res);
++        return;
++    }
++
++    if (req.body().size() > flaxMaxUploadBytes)
++    {
++        BMCWEB_LOG_ERROR("flax-hi: rejecting {} byte upload (cap {})",
++                         req.body().size(), flaxMaxUploadBytes);
++        asyncResp->res.result(boost::beast::http::status::payload_too_large);
++        return;
++    }
++
+     // The BIOS uploads multipart/form-data; a plain client may PUT a raw body.
+     std::string_view payload = req.body();
+     std::string extracted;
+@@ -161,17 +241,38 @@
+     std::error_code ec;
+     std::filesystem::create_directories(dir, ec);
+ 
+-    std::ofstream out(dir + "/" + partName,
+-                      std::ofstream::out | std::ofstream::binary |
+-                          std::ofstream::trunc);
+-    if (!out)
++    // Write-then-rename, so a truncated transfer can never present itself to
++    // the Phase 2 translator as a complete one.
++    const std::string finalPath = dir + "/" + partName;
++    const std::string tmpPath = finalPath + ".tmp";
++    {
++        std::ofstream out(tmpPath, std::ofstream::out | std::ofstream::binary |
++                                       std::ofstream::trunc);
++        if (!out)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: cannot open {} for write", tmpPath);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++        out << payload;
++        out.flush();
++        if (!out)
++        {
++            BMCWEB_LOG_ERROR("flax-hi: short write to {} -- out of space?",
++                             tmpPath);
++            messages::internalError(asyncResp->res);
++            return;
++        }
++    }
++    std::filesystem::rename(tmpPath, finalPath, ec);
++    if (ec)
+     {
+-        BMCWEB_LOG_ERROR("flax-hi: cannot open {}/{} for write", dir, partName);
++        BMCWEB_LOG_ERROR("flax-hi: rename {} -> {} failed: {}", tmpPath,
++                         finalPath, ec.message());
++        std::filesystem::remove(tmpPath, ec);
+         messages::internalError(asyncResp->res);
+         return;
+     }
+-    out << payload;
+-    out.close();
+ 
+     if (markComplete)
+     {
+@@ -252,18 +353,128 @@
+         return;
+     }
+ 
+-    asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/Oem/Ami/InventoryData";
+-    asyncResp->res.jsonValue["@odata.type"] =
+-        "#AMIInventoryData.v1_0_0.AMIInventoryData";
+-    asyncResp->res.jsonValue["Id"] = "InventoryData";
+-    asyncResp->res.jsonValue["Name"] = "Inventory Data";
+-    BMCWEB_LOG_ERROR(
+-        "flax-hi: GET InventoryData (zero CRCs -> ask for a full push)");
++    // TEMPORARY: bail out to the known-safe 405 if the kill switch exists.
++    std::error_code kec;
++    if (std::filesystem::exists(flaxGetKillSwitch, kec))
++    {
++        BMCWEB_LOG_WARNING(
++            "flax-hi: GET InventoryData disabled by kill switch -> 405");
++        asyncResp->res.result(
++            boost::beast::http::status::method_not_allowed);
++        return;
++    }
++
++    // The body must be a BARE object with exactly GroupCrcList / Systems /
++    // Chassis, mirroring the OEM
++    // (/vagrant/oem-reference/protocol-reverse/inventory.json).
++    //
++    // NO @odata.id / @odata.type / Id / Name.  The OEM does not send them, and
++    // that Redfish boilerplate is the one structural difference that survived
++    // every earlier attempt to make this route safe -- patch 0011 added
++    // Systems/Chassis but kept the boilerplate and the BIOS still #GP'd.
++    //
++    // Answering this GET at all is what steers the BIOS onto the OEM push path
++    // (one POST of the whole inventory here) instead of the generic Redfish
++    // fallback (DELETE/POST on Systems/system/Memory etc).  Getting the body
++    // wrong makes the host unbootable -- see flaxGetKillSwitch.
++    BMCWEB_LOG_ERROR("flax-hi: GET InventoryData (OEM shape, zero CRCs)");
++
+     nlohmann::json::object_t groupCrcList;
+-    groupCrcList["CPU"] = 0;
++    // Zero can never match a real CRC, so every group reads as stale and the
++    // BIOS pushes all of them.  Deliberate: we do not cache inventory.
+     groupCrcList["DIMM"] = 0;
++    groupCrcList["CPU"] = 0;
+     groupCrcList["PCIE"] = 0;
++
++    nlohmann::json::object_t status;
++    status["State"] = "Enabled";
++    status["Health"] = "OK";
++    status["HealthRollup"] = "OK";
++
++    nlohmann::json::object_t tpmStatus;
++    tpmStatus["State"] = "Enabled";
++    nlohmann::json::object_t tpm;
++    tpm["FirmwareVersion"] = "7.62";
++    tpm["FirmwareVersion2"] = "12.13824";
++    tpm["InterfaceType"] = "TPM2_0";
++    tpm["InterfaceTypeSelection"] = "BiosSetting";
++    tpm["Status"] = tpmStatus;
++    nlohmann::json::array_t trustedModules;
++    trustedModules.emplace_back(std::move(tpm));
++
++    // TODO: source these from D-Bus (UUID from
++    // xyz.openbmc_project.Common.UUID, serial/SKU/manufacturer from the
++    // baseboard FRU, BiosVersion from bios_active).  Literals for now so this
++    // change tests exactly one variable -- whether dropping the Redfish
++    // boilerplate is what stops the BIOS crashing.
++    nlohmann::json::object_t system;
++    system["Manufacturer"] = "Quanta";
++    system["SerialNumber"] = "Default string";
++    system["SKU"] = "Default string";
++    system["BiosVersion"] = "TPC_P26C";
++    system["UUID"] = "00000000-0000-0000-0000-000000000000";
++    system["Status"] = status;
++    system["TrustedModules"] = std::move(trustedModules);
++    nlohmann::json::array_t systems;
++    systems.emplace_back(std::move(system));
++
++    nlohmann::json::object_t chassis;
++    chassis["Manufacturer"] = "Quanta";
++    chassis["SerialNumber"] = "Default string";
++    chassis["SKU"] = "Default string";
++    chassis["ChassisType"] = "RackMount";
++    chassis["Status"] = status;
++    nlohmann::json::array_t chassisList;
++    chassisList.emplace_back(std::move(chassis));
++
++    // ---- the remaining manifest members -------------------------------------
++    // This response is a CAPABILITY MANIFEST, not a stub.  The OEM handler
++    // (redfish-oem/oem/ami_hi/hi-inventory-data.lua, LuaJIT bytecode -- read its
++    // string table) assembles SEVEN members, and RfInventory walks the ones it
++    // names.  Declaring only Systems/Chassis left the BIOS reaching for members
++    // that were not there, which is the null-deref shape (RAX=0, RCX=0) at a
++    // constant RIP that we saw on every crash.
++    //
++    // Where we have nothing to advertise we emit the member PRESENT BUT EMPTY.
++    // An empty array is dereferenceable; a missing key is not.  It also avoids
++    // provoking the follow-up requests we would then have to serve -- advertise
++    // a DRE instance and the BIOS GETs that GUID straight back (patch 0010's
++    // lesson: never advertise something you do not serve).
++
++    // SecureBoot: the OEM advertises the ResetKeys action here, which is why its
++    // BIOS fetches SecureBoot.ResetKeys and ours never did.
++    nlohmann::json::object_t resetKeys;
++    resetKeys["target"] =
++        "/redfish/v1/Systems/system/SecureBoot/Actions/SecureBoot.ResetKeys";
++    resetKeys["@Redfish.ActionInfo"] =
++        "/redfish/v1/Systems/system/SecureBoot/ResetKeysActionInfo";
++    nlohmann::json::object_t sbActions;
++    sbActions["#SecureBoot.ResetKeys"] = std::move(resetKeys);
++
++    nlohmann::json::object_t secureBoot;
++    secureBoot["@odata.id"] = "/redfish/v1/Systems/system/SecureBoot";
++    secureBoot["SecureBootEnable"] = false;
++    secureBoot["SecureBootMode"] = "SetupMode";
++    secureBoot["SecureBootCurrentBoot"] = "Disabled";
++    secureBoot["Actions"] = std::move(sbActions);
++
++    // Registries / DRE / NetworkDeviceFunctions: present, empty.
++    nlohmann::json::object_t registries;
++    registries["Members"] = nlohmann::json::array_t();
++
++    nlohmann::json::object_t biosStaticFiles;
++    biosStaticFiles["Running"] = false;
++    biosStaticFiles["Md5Checksum"] = "";
++
+     asyncResp->res.jsonValue["GroupCrcList"] = std::move(groupCrcList);
++    asyncResp->res.jsonValue["Systems"] = std::move(systems);
++    asyncResp->res.jsonValue["Chassis"] = std::move(chassisList);
++    asyncResp->res.jsonValue["SecureBoot"] = std::move(secureBoot);
++    asyncResp->res.jsonValue["Registries"] = std::move(registries);
++    asyncResp->res.jsonValue["DRE"] = nlohmann::json::array_t();
++    asyncResp->res.jsonValue["NetworkDeviceFunctions"] =
++        nlohmann::json::array_t();
++    asyncResp->res.jsonValue["BiosStaticFiles"] = std::move(biosStaticFiles);
+     asyncResp->res.result(boost::beast::http::status::ok);
+ }
+ 
+@@ -316,6 +527,12 @@
+         .methods(boost::beast::http::verb::post, boost::beast::http::verb::put)(
+             std::bind_front(handleFlaxInventoryUpload, std::ref(app)));
+ 
++    // Steers the BIOS onto the OEM push path.  Kill switch inside the handler.
++    BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/InventoryData/")
++        .privileges(redfish::privileges::getUpdateService)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(handleFlaxInventoryDataGet, std::ref(app)));
++
+     BMCWEB_ROUTE(app, "/redfish/v1/Oem/Ami/InventoryData/")
+         .privileges(redfish::privileges::postUpdateService)
+         .methods(boost::beast::http::verb::patch)(
