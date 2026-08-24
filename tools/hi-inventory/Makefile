@@ -3,16 +3,23 @@
 #   make test          # build and run against samples/collections
 #   DUMP=1 make test   # also print the full property table
 #
+# The sources under test live in the firmware repo, not here.  FLAX_REPO
+# defaults to an openbmc-ami checkout sitting next to this one; override it if
+# yours is somewhere else:
+#
+#   make FLAX_REPO=/path/to/openbmc-ami test
+#
 # nlohmann/json.hpp is header-only; it is symlinked out of a Yocto sysroot into
 # .deps/ so only that one header is pulled in (adding the whole ARM sysroot
 # include path to a host build breaks on 32-bit uintptr_t).  Override
 # NLOHMANN_DIR if the bmcweb work directory has been cleaned.
 
-SRC_DIR := ../../meta-flax/recipes-phosphor/hi-inventory/flax-hi-inventory
+FLAX_REPO ?= ../../openbmc-ami
+SRC_DIR := $(FLAX_REPO)/meta-flax/recipes-phosphor/hi-inventory/flax-hi-inventory
 NLOHMANN_DIR ?= $(firstword $(wildcard \
 	/usr/include/nlohmann \
-	../../build/tiogapass/tmp/work/*/bmcweb/*/recipe-sysroot/usr/include/nlohmann \
-	../../build/tiogapass/tmp/sysroots-components/*/nlohmann-json/usr/include/nlohmann))
+	$(FLAX_REPO)/build/tiogapass/tmp/work/*/bmcweb/*/recipe-sysroot/usr/include/nlohmann \
+	$(FLAX_REPO)/build/tiogapass/tmp/sysroots-components/*/nlohmann-json/usr/include/nlohmann))
 
 CXXFLAGS := -std=c++17 -Wall -Wextra -O1 -I$(SRC_DIR) -I.deps
 
