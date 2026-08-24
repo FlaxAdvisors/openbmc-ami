@@ -5,9 +5,25 @@
 #
 # To cut a release build:  set FLAX_RELEASE = "1" in local.conf or on the bitbake command line
 # To bump the version:     change FLAX_VERSION below
+#
+# This bbappend owns /etc/os-release outright: meta-ami's and
+# meta-common/meta-common's os-release bbappends are BBMASKed in
+# conf/layer.conf, so the fields and the provenance block they used to supply
+# are defined here instead.  That keeps the whole thing in our layer, which is
+# the only one that survives the move onto a canonical OpenBMC tree.
+
+require flax-provenance.inc
 
 FLAX_VERSION = "1.1.0"
 FLAX_RELEASE ?= "0"
+
+# Repos to record provenance for.  Absent ones, and layers with no .git of
+# their own, are skipped -- so this needs no edit when the layer set changes.
+FLAX_PROVENANCE_REPOS ?= "${COREBASE} ${COREBASE}/meta-ami ${COREBASE}/meta-common"
+
+# Previously supplied by meta-common/meta-common's bbappend.
+OS_RELEASE_FIELDS:append = " OPENBMC_VERSION IPMI_MAJOR IPMI_MINOR IPMI_AUX13 IPMI_AUX14 IPMI_AUX15 IPMI_AUX16"
+OS_RELEASE_FIELDS:remove = "BUILD_ID EXTENDED_VERSION"
 
 # os-release.bb hashes VERSION_ID/VERSION into do_compile via
 # OS_RELEASE_FIELDS, and our dev version string ends in a minute-granularity
@@ -22,9 +38,6 @@ FLAX_RELEASE ?= "0"
 do_compile[vardepsexclude] += "OPENBMC_VERSION VERSION_ID VERSION DATETIME"
 do_compile[vardeps] += "FLAX_VERSION FLAX_RELEASE"
 
-# Anonymous python block runs after version-vars.inc's python() block (which is required by
-# meta-common and meta-ami bbappends and calls d.setVar() to override regular assignments).
-# Our python() runs last because meta-flax has the highest priority and is parsed last.
 python() {
     flax_version = d.getVar('FLAX_VERSION') or '1.0.0'
     flax_release = d.getVar('FLAX_RELEASE') or '0'
@@ -44,4 +57,35 @@ python() {
     parts = (flax_version + '.0.0').split('.')
     d.setVar('IPMI_MAJOR', parts[0])
     d.setVar('IPMI_MINOR', parts[1])
+
+    # IPMI Auxiliary Firmware Revision.  AUX14-16 carry the first three bytes of
+    # the meta-ami HEAD, which is what version-vars.inc used to publish; keep
+    # that so `ipmitool mc info` does not change under the fleet.  Falls back to
+    # COREBASE once meta-ami is no longer a separate checkout.
+    corebase = d.getVar('COREBASE') or ''
+    aux_repo = os.path.join(corebase, 'meta-ami')
+    if not flax_is_git_repo(aux_repo):
+        aux_repo = corebase
+    aux_hash = (flax_git(d, aux_repo, ['rev-parse', 'HEAD']) or '')
+    d.setVar('IPMI_AUX13', '0x0')
+    if len(aux_hash) >= 6:
+        d.setVar('IPMI_AUX14', '0x{}'.format(aux_hash[0:2]))
+        d.setVar('IPMI_AUX15', '0x{}'.format(aux_hash[2:4]))
+        d.setVar('IPMI_AUX16', '0x{}'.format(aux_hash[4:6]))
 }
+
+python do_compile:append() {
+    repos = (d.getVar('FLAX_PROVENANCE_REPOS') or '').split()
+    lines = flax_provenance_lines(lambda repo, args: flax_git(d, repo, args), repos)
+    if not lines:
+        return
+    with open(d.expand('${B}/os-release'), 'a') as f:
+        f.write('\n'.join(lines) + '\n')
+}
+
+# The provenance block reads git state at task time, so the recipe must not be
+# served from the parse cache.  (Was set by the masked AMI bbappends.)
+BB_DONT_CACHE = "1"
+
+# Make os-release available to other recipes.  (Likewise.)
+SYSROOT_DIRS:append = " ${sysconfdir}"
