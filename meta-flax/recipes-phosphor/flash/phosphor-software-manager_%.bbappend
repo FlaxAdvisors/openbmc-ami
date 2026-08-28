@@ -7,6 +7,8 @@ PACKAGECONFIG:append = " flash_bios"
 SRC_URI += " \
     file://0001-fix-bios-activation-in-fwupd-script-mode.patch \
     file://0010-untar-failure-informational-not-error.patch \
+    file://0011-persist-host-bios-version-across-bmc-reboot.patch \
+    file://0012-mark-host-bios-updateable-in-redfish.patch \
     file://bios-update \
     file://backup-bmc-flash \
     file://obmc-flash-host-bios@.service \

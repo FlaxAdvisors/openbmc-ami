@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] Persist the host BIOS version across a BMC reboot
+
+createBIOSObject() runs on every daemon start and has no way to discover the
+host BIOS version, so upstream constructs the object with the literal string
+"null".  The real version is only ever written in activation.cpp when a BIOS
+image finishes flashing, and it lives solely in that process's memory -- so the
+next BMC reboot silently reverts Redfish
+
+    /redfish/v1/Systems/system              BiosVersion
+    /redfish/v1/UpdateService/FirmwareInventory/bios_active  Version
+
+back to "null".  Observed on TiogaPass: a BIOS flashed with MANIFEST
+version=F08_3A24_v7 reported that value until the BMC was rebooted, then went
+back to "null".
+
+On TiogaPass nothing reports the version back afterwards either -- the
+host-interface/SMBIOS inventory path does not exist for every BIOS we ship --
+so the value recorded at flash time is the only one we will ever have.  Write
+it to /var (which survives a reboot) on a successful upgrade and read it back
+when the object is created.  Absent the file the behaviour is unchanged.
+
+--- a/item_updater.hpp
++++ b/item_updater.hpp
+@@ -12,7 +12,10 @@
+ #include <xyz/openbmc_project/Software/ApplyOptions/server.hpp>
+ #include <xyz/openbmc_project/Software/FirmwareUpdateTarget/server.hpp>
+ 
++#include <filesystem>
++#include <fstream>
+ #include <string>
++#include <system_error>
+ #include <vector>
+ 
+ namespace phosphor
+@@ -32,6 +35,49 @@
+ 
+ namespace MatchRules = sdbusplus::bus::match::rules;
+ using VersionClass = phosphor::software::manager::Version;
++
++/** @brief File that carries the flashed host BIOS version across a BMC reboot.
++ *
++ *  createBIOSObject() runs on every start and cannot learn the BIOS version on
++ *  its own, so upstream publishes the literal string "null" and whatever the
++ *  last flash recorded is lost when the BMC reboots.  On TiogaPass nothing
++ *  reports it back afterwards either -- the host-interface/SMBIOS path does not
++ *  exist for every BIOS we ship -- so the flashed value is the only version we
++ *  will ever have.  /var survives a reboot, so stash it there.
++ */
++constexpr auto BIOS_VERSION_PERSIST_FILE =
++    "/var/lib/phosphor-software-manager/host_bios_version";
++
++/** @brief Read the persisted host BIOS version.
++ *  @return The recorded version, or "null" when none has been recorded.
++ */
++inline std::string readPersistedBiosVersion()
++{
++    std::ifstream file(BIOS_VERSION_PERSIST_FILE);
++    std::string version;
++    if (file.is_open() && std::getline(file, version) && !version.empty())
++    {
++        return version;
++    }
++    return "null";
++}
++
++/** @brief Record the host BIOS version so it survives a BMC reboot. */
++inline void persistBiosVersion(const std::string& version)
++{
++    if (version.empty())
++    {
++        return;
++    }
++    std::error_code ec;
++    std::filesystem::create_directories(
++        std::filesystem::path(BIOS_VERSION_PERSIST_FILE).parent_path(), ec);
++    std::ofstream file(BIOS_VERSION_PERSIST_FILE, std::ios::trunc);
++    if (file.is_open())
++    {
++        file << version << "\n";
++    }
++}
+ using AssociationList =
+     std::vector<std::tuple<std::string, std::string, std::string>>;
+ 
+--- a/item_updater.cpp
++++ b/item_updater.cpp
+@@ -871,7 +871,9 @@
+     createFunctionalAssociation(path);
+ 
+     auto versionId = path.substr(pos + 1);
+-    auto version = "null";
++    // Restore the version recorded by the last BIOS flash rather than
++    // republishing the "null" placeholder on every BMC boot.
++    std::string version = readPersistedBiosVersion();
+     AssociationList assocs = {};
+     biosActivation = std::make_unique<Activation>(
+         bus, path, *this, versionId, server::Activation::Activations::Active,
+--- a/activation.cpp
++++ b/activation.cpp
+@@ -603,8 +603,11 @@
+             activation(softwareServer::Activation::Activations::Active);
+ 
+             info("Bios upgrade completed successfully.");
+-            parent.biosVersion->version(
+-                parent.versions.find(versionId)->second->version());
++            auto newBiosVersion =
++                parent.versions.find(versionId)->second->version();
++            parent.biosVersion->version(newBiosVersion);
++            // Keep it across a BMC reboot; createBIOSObject() reads it back.
++            persistBiosVersion(newBiosVersion);
+ 
+             // Delete the uploaded activation
+             boost::asio::post(getIOContext(), [this]() {

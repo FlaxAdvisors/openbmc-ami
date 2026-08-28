@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] fbtp: mark the baseboard as Inventory.Item.System
+
+bmcweb's getComputerSystem() subtrees /xyz/openbmc_project/inventory looking
+for xyz.openbmc_project.Inventory.Item.System, and only for an object carrying
+that interface does it read Inventory.Decorator.Asset (afterGetInventory) and
+then, at the tail of that same callback, populate BiosVersion via
+sw_util::populateSoftwareInformation().
+
+TiogaPass had no object implementing Item.System at all -- only Decorator.Asset
+objects (TiogaPass_Baseboard, cpu0/1, dimm0-11) -- so afterGetInventory() never
+ran and /redfish/v1/Systems/system reported Manufacturer, Model, SerialNumber,
+PartNumber, SubModel *and* BiosVersion all as null together.
+
+The baseboard already carries Decorator.Asset sourced from the FRU, and
+bmcweb reads Asset from the same object and service that exposes Item.System,
+so tagging the existing board is sufficient -- no new object or daemon.
+global.json permits Item.System as a board-level property (unlike
+Decorator.Ipmi, which the schema strips), so entity-manager will publish it.
+
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -1527,5 +1527,6 @@
+     "Model": "$PRODUCT_PRODUCT_NAME",
+     "PartNumber": "$PRODUCT_PART_NUMBER",
+     "SerialNumber": "$PRODUCT_SERIAL_NUMBER"
+-  }
++  },
++  "xyz.openbmc_project.Inventory.Item.System": {}
+ }
+\ No newline at end of file

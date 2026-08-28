@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] Mark the host BIOS updateable in Redfish
+
+/redfish/v1/UpdateService/FirmwareInventory/bios_active reported
+"Updateable": false while bmc_active reported true, even though the host BIOS
+is flashed through exactly the same Redfish multipart push as the BMC (and is,
+in practice, updated that way regularly).
+
+bmcweb defaults Updateable to false and only sets it true for objects that
+appear in the /xyz/openbmc_project/software/updateable association.
+ItemUpdater::createUpdateableAssociation() exists and is called for BMC images,
+but createBIOSObject() only creates the active and functional associations, so
+the BIOS object never joins it.
+
+Add the missing call.  This is purely descriptive -- it corrects what the
+service advertises about itself; the BIOS update path is unchanged.
+
+--- a/item_updater.cpp
++++ b/item_updater.cpp
+@@ -869,6 +869,11 @@
+ 
+     createActiveAssociation(path);
+     createFunctionalAssociation(path);
++    // Without this the BIOS object never joins
++    // /xyz/openbmc_project/software/updateable, so bmcweb leaves
++    // FirmwareInventory/bios_active "Updateable": false even though the host
++    // BIOS is updatable through exactly the same Redfish push as the BMC.
++    createUpdateableAssociation(path);
+ 
+     auto versionId = path.substr(pos + 1);
+     // Restore the version recorded by the last BIOS flash rather than

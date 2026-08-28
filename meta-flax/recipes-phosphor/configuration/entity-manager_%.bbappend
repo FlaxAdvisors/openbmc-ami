@@ -33,6 +33,10 @@ SRC_URI:append = " file://0021-fbtp-gate-main-and-INA230-rails-on-host-power-sta
 SRC_URI:append = " file://0022-fbtp-raise-fan-tach-upper-noncritical-to-9500.patch"
 SRC_URI:append = " file://0023-fbtp-add-stepwise-hysteresis-to-stop-fan-oscillation.patch"
 SRC_URI:append = " file://0024-fbtp-match-oem-failsafe-and-ramp-rate.patch"
+#  0025 - tag the baseboard as Inventory.Item.System so bmcweb populates
+#         Systems/system Manufacturer/Model/Serial/PartNumber AND BiosVersion
+#         (all of which were null together because no Item.System existed)
+SRC_URI:append = " file://0025-fbtp-add-Inventory-Item-System-to-baseboard.patch"
 
 #RDEPENDS_${PN} += "default-fru"
 
