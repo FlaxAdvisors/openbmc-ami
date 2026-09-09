@@ -1,6 +1,14 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-# Override with correct channel config that includes kcs3
+# Pin the IPMI channel table.  The AMI OneTree copy of this file replaced
+# channel 8 ("INTRABMC", medium oem / session-less) with a second "eth0" entry.
+# ipmid resolves a request's source channel from the caller's D-Bus name
+# (ipmid-new.cpp channelFromMessage); any caller that does not own
+# xyz.openbmc_project.Ipmi.Channel.<name> -- notably `ipmitool -I dbus` run on
+# the BMC itself -- falls back to getChannelByName("INTRABMC").  With INTRABMC
+# missing that lookup throws and every such command is answered 0xD3, which
+# ipmitool prints as "... failed: Destination unavailable".  Restored to the
+# upstream/Intel/FB convention (channel 8 = INTRABMC); LAN stays on channel 1.
 SRC_URI += "file://channel_config.json"
 
 # Override Get Device ID values to match the OEM image:
