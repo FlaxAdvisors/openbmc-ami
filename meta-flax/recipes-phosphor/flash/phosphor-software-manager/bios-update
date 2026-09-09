@@ -18,11 +18,46 @@
 #   5. Unbind controller, switch mux back to PCH, leave driver unbound
 #
 # A bash EXIT trap guarantees the SPI bus is returned to PCH even on error.
+#
+# The chip is a full Intel SPI image -- descriptor + ME + (GbE) + BIOS -- not
+# just the BIOS region.  Rewriting the ME region puts the PCH in a state where
+# it will not enter S0 until input power has actually been removed (G3): the
+# host will not power on, and neither will the front-panel button, because that
+# button is a hardware path into the PCH/CPLD, not something the BMC drives.
+#
+# So we flash with `flashcp -p`, which erases and writes only the eraseblocks
+# that differ.  A same-ME BIOS update then never touches the ~16 MB ME region
+# and needs no power cycle at all; a new/blank chip differs everywhere and is
+# written in full, as it must be.  We compare the ME region against the chip
+# before flashing so we know which case this is, and cycle the node through the
+# hot-swap controller afterwards only when the ME actually changed.
 
 set -e
 
 IMAGE_DIR="${1}"
 IMAGE_FILE="${IMAGE_DIR}/image-bios"
+
+# Optional operator overrides.
+#   BIOS_UPDATE_AUTO_POWER_CYCLE=0  -- never cycle the node automatically; print
+#                                      the recovery command and leave it to the
+#                                      operator.  Default is 1 (cycle).
+#   BIOS_UPDATE_CYCLE_DELAY_S=<n>   -- seconds to wait before the cycle, so that
+#                                      systemd can mark this unit "done" and
+#                                      phosphor-software-manager can record the
+#                                      new BIOS version first.  Default 20.
+# shellcheck disable=SC1091
+[ -r /etc/default/bios-update ] && . /etc/default/bios-update
+AUTO_POWER_CYCLE="${BIOS_UPDATE_AUTO_POWER_CYCLE:-1}"
+CYCLE_DELAY_S="${BIOS_UPDATE_CYCLE_DELAY_S:-20}"
+
+# ADM1275 hot-swap controller.  Writing 0x0c to manufacturer register 0xd9 makes
+# it drop and restore its own output = a real G3 for the whole node, which is
+# what clears the post-ME-flash lockout.  Same register FB's power-util uses for
+# sled_cycle on this board.  -f is required because the adm1275 driver is bound.
+HSC_BUS=7
+HSC_ADDR=0x45
+HSC_REG=0xd9
+HSC_VAL=0x0c
 
 # GPIO N5 = BIOS_SPI_BMC_CTRL (offset 109 from chip base)
 # AST2500 has one gpiochip; find its base dynamically.
@@ -82,6 +117,106 @@ find_pnor_dev() {
         fi
     done
     return 1
+}
+
+# ── Intel ME region detection ────────────────────────────────────────────────
+# The descriptor lives at the start of the chip: signature 0x0FF0A55A at 0x10,
+# FLMAP0 at 0x14 carries FRBA (the region-base address), and FLREG2 at FRBA+8
+# describes the ME region.  base/limit are 4 KiB-granular, encoded as bits
+# [14:0] << 12 and bits [30:16] << 12 | 0xfff respectively.
+#
+# BusyBox od has no -A/-t.  `od -x` prints 16-bit words in host byte order, so
+# on this (little-endian) BMC four bytes b0..b3 come out as two words "b1b0 b3b2"
+# — the 32-bit LE value is therefore the second word followed by the first.
+# If that ever stopped holding, the descriptor signature check in me_region()
+# below would fail and we would fall back to "ME assumed changed", which is the
+# safe direction.
+
+read_u32le() {          # $1 = file, $2 = byte offset -> decimal value on stdout
+    local hex
+    hex=$(dd if="${1}" bs=1 skip="${2}" count=4 2>/dev/null | od -x | head -n 1 \
+          | awk '{print $2 $3}')
+    [ "${#hex}" -eq 8 ] || return 1
+    printf '%u' "$(( 0x${hex:4:4}${hex:0:4} ))"
+}
+
+me_region() {           # $1 = image -> "<base> <length>" in bytes on stdout
+    local f="${1}" sig flmap0 frba flreg2 base limit
+    sig=$(read_u32le "${f}" 16) || return 1
+    [ "${sig}" -eq $(( 0x0FF0A55A )) ] || return 1
+    flmap0=$(read_u32le "${f}" 20) || return 1
+    frba=$(( ((flmap0 >> 16) & 0xff) << 4 ))
+    flreg2=$(read_u32le "${f}" $(( frba + 8 ))) || return 1
+    base=$(( (flreg2 & 0x7fff) << 12 ))
+    limit=$(( (((flreg2 >> 16) & 0x7fff) << 12) | 0xfff ))
+    [ "${base}" -lt "${limit}" ] || return 1    # region marked unused
+    echo "${base} $(( limit - base + 1 ))"
+}
+
+# "changed" | "unchanged".  Anything we cannot read confidently is reported as
+# "changed", so an unrecognised image errs towards cycling the node rather than
+# towards leaving the operator with a box that will not power on.
+ME_STATE="changed"
+
+detect_me_change() {
+    local region base len blk cnt
+    if ! region=$(me_region "${IMAGE_FILE}"); then
+        echo "bios-update: no usable Intel flash descriptor in the image —" \
+             "assuming the ME region changes"
+        ME_STATE="changed"
+        return 0
+    fi
+    base="${region% *}"
+    len="${region#* }"
+    if [ $(( base % 4096 )) -ne 0 ] || [ $(( len % 4096 )) -ne 0 ]; then
+        echo "bios-update: ME region is not 4 KiB-aligned — assuming it changes"
+        ME_STATE="changed"
+        return 0
+    fi
+    blk=$(( base / 4096 ))
+    cnt=$(( len / 4096 ))
+    printf 'bios-update: ME region 0x%08x-0x%08x (%s KiB); comparing with the chip\n' \
+        "${base}" "$(( base + len - 1 ))" "$(( len / 1024 ))"
+    if dd if="${IMAGE_FILE}" bs=4096 skip="${blk}" count="${cnt}" 2>/dev/null \
+       | cmp -s - <(dd if="${PNOR_DEV}" bs=4096 skip="${blk}" count="${cnt}" 2>/dev/null)
+    then
+        ME_STATE="unchanged"
+        echo "bios-update: ME region is unchanged — flashcp -p will not touch it," \
+             "no power cycle needed"
+    else
+        ME_STATE="changed"
+        echo "bios-update: ME region DIFFERS — the node must go through G3 after" \
+             "the flash or it will not power on"
+    fi
+}
+
+# ── hot-swap controller node cycle ───────────────────────────────────────────
+
+HSC_SYSFS="/sys/bus/i2c/devices/${HSC_BUS}-$(printf '%04x' "${HSC_ADDR}")"
+HSC_CMD="i2cset -f -y ${HSC_BUS} ${HSC_ADDR} ${HSC_REG} ${HSC_VAL}"
+
+schedule_hsc_cycle() {
+    # The cycle drops the BMC too — instantly, with no graceful shutdown — so it
+    # must not run inline: this script has to exit first, so systemd can mark the
+    # unit "done" and phosphor-software-manager can record the new BIOS version.
+    # A transient systemd timer survives our own cgroup going away.
+    if [ ! -d "${HSC_SYSFS}" ]; then
+        echo "bios-update: no hot-swap controller at ${HSC_SYSFS}"
+        echo "bios-update: ACTION REQUIRED: remove AC power from the node, then" \
+             "power it back on."
+        return 0
+    fi
+    echo "bios-update: scheduling node power cycle in ${CYCLE_DELAY_S}s (${HSC_CMD})"
+    echo "bios-update: the BMC will drop with it and take about 4 minutes to return"
+    if systemd-run --on-active="${CYCLE_DELAY_S}" \
+                   --unit=bios-update-node-cycle \
+                   --description="Post-BIOS-update node power cycle (ME region changed)" \
+                   /bin/sh -c "sync; ${HSC_CMD}" >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "bios-update: warning: could not schedule the cycle"
+    echo "bios-update: ACTION REQUIRED: run '${HSC_CMD}' or remove AC power."
+    return 0
 }
 
 # ── systemd watchdog guard ───────────────────────────────────────────────────
@@ -191,14 +326,23 @@ if [ -z "${PNOR_DEV}" ]; then
     exit 1
 fi
 
+# ── does this update change the ME region? ────────────────────────────────────
+# Must run before the flash, while the chip still holds the outgoing image.
+
+detect_me_change
+
 echo "bios-update: flashing ${IMAGE_FILE} → ${PNOR_DEV}"
 
 # ── flash ─────────────────────────────────────────────────────────────────────
 # Disarm the watchdog only around the long write, then re-arm immediately so the
 # BMC is unprotected for the shortest possible window.
+#
+# -p erases and writes only the eraseblocks that differ, and reads each one back
+# and compares it immediately after writing, so verification coverage is the same
+# as a full-chip write.  Blocks it skips already matched the image.
 
 wdt_disarm
-flashcp -v "${IMAGE_FILE}" "${PNOR_DEV}"
+flashcp -v -p "${IMAGE_FILE}" "${PNOR_DEV}"
 wdt_rearm
 
 echo "bios-update: flash complete"
@@ -213,6 +357,26 @@ sleep 2
 spi_mux_to_pch
 sleep 2
 
+# ── bring the host back ───────────────────────────────────────────────────────
+# Two different endings, decided by whether the ME region was rewritten.
+
+if [ "${ME_STATE}" = "changed" ]; then
+    # The PCH will not enter S0 until input power has actually been removed.
+    # obmcutil poweron would fail at PS_PWROK, and so would the front-panel
+    # button, so do not pretend otherwise — cycle the node instead.
+    echo "bios-update: ME region was rewritten; a soft power-on cannot work here"
+    if [ "${AUTO_POWER_CYCLE}" = "1" ]; then
+        schedule_hsc_cycle
+    else
+        echo "bios-update: automatic power cycle disabled" \
+             "(BIOS_UPDATE_AUTO_POWER_CYCLE=0)"
+        echo "bios-update: ACTION REQUIRED: run '${HSC_CMD}' or remove AC power," \
+             "then power the host on."
+    fi
+    echo "bios-update: done at $(date)"
+    exit 0
+fi
+
 # ── power on host ─────────────────────────────────────────────────────────────
 # Use obmcutil to drive x86-power-control's normal power-on path
 # (xyz.openbmc_project.Chassis.Control.Power@0).  Fighting power-control
@@ -222,9 +386,7 @@ sleep 2
 echo "bios-update: powering on host (obmcutil poweron)"
 obmcutil poweron || true
 
-# Poll up to 60s for the host to leave Off.  power-control may still report
-# "power supply power good failed to assert" if the PSU does not respond;
-# in that case the user must AC-cycle the chassis to clear PSU state.
+# Poll up to 60s for the host to leave Off.
 STATE="unknown"
 for _i in $(seq 1 12); do
     sleep 5
@@ -238,6 +400,17 @@ for _i in $(seq 1 12); do
     esac
 done
 echo "bios-update: host state after power-on: ${STATE:-unknown}"
+
+# The ME was not touched, so this should have worked.  If it did not, the node
+# is in the separate PS_PWROK/POWER_OUT failure mode, not the ME lockout.
+case "${STATE}" in
+    *Off*|unknown)
+        echo "bios-update: host did not come up, and the ME was NOT rewritten —" \
+             "this is not the post-ME-flash lockout."
+        echo "bios-update: recovery of last resort: '${HSC_CMD}' (cycles the whole" \
+             "node, drops the BMC with it)."
+        ;;
+esac
 
 echo "bios-update: done at $(date)"
 exit 0

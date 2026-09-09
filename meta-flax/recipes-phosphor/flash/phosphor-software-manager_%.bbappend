@@ -14,7 +14,9 @@ SRC_URI += " \
     file://obmc-flash-host-bios@.service \
 "
 
-RDEPENDS:${PN}-updater += "bash mtd-utils"
+# bash: bios-update/backup-bmc-flash are bash scripts.  mtd-utils: flashcp.
+# i2c-tools: i2cset, for the post-ME-flash node cycle through the ADM1275 HSC.
+RDEPENDS:${PN}-updater += "bash mtd-utils i2c-tools"
 
 do_install:append() {
     install -d ${D}${sbindir}
