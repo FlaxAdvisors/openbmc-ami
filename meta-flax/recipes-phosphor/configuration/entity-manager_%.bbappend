@@ -37,6 +37,17 @@ SRC_URI:append = " file://0024-fbtp-match-oem-failsafe-and-ramp-rate.patch"
 #         Systems/system Manufacturer/Model/Serial/PartNumber AND BiosVersion
 #         (all of which were null together because no Item.System existed)
 SRC_URI:append = " file://0025-fbtp-add-Inventory-Item-System-to-baseboard.patch"
+#  0026 - add the Labels allowlist the PCH VR (0x68) is missing; without it
+#         psusensor also instantiates the chip's 12 V vin1/vin2 rails, which
+#         collide on the same sensor name as vout1/vout2 and win the
+#         activate() race on host power-on -> false "Reading 12 > Threshold 1"
+#         Upper Critical SEL on MB_VR_PCH_PVNN and MB_VR_PCH_P1V05
+#  0027 - give the VR vout sensors a <label>_Max just above their critical
+#         threshold; the dbus-sensors default of 255 makes IPMI encode these
+#         1 V rails at one volt per count (reporting only - D-Bus threshold
+#         detection uses the raw double)
+SRC_URI:append = " file://0026-fbtp-add-missing-Labels-allowlist-to-PCH-VR.patch"
+SRC_URI:append = " file://0027-fbtp-give-VR-vout-sensors-a-usable-IPMI-range.patch"
 
 #RDEPENDS_${PN} += "default-fru"
 
