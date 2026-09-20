@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] allowlist: add the OpenBMC OEM fan control command
+
+phosphor-pid-control registers NetFn 0x2E, OEM group IANA 49871 (OpenBMC),
+command 0x04 for zone fan control -- manual mode get/set, failsafe get, and
+(with our phosphor-pid-control patch 0001) set PWM duty.  It was never in
+ipmi-allowlist.conf, so every one of those subcommands was rejected with
+completion code 0xD4 on the LAN channel, which is presumably why none of
+them had ever been used.  The system interface bypasses this filter
+entirely, so only remote callers were affected.
+
+The channel mask is 0x7f7f rather than 0xff7f because this command writes:
+the file's convention leaves bit 15 clear for anything the host should not
+be able to drive, and the host has no business setting the BMC's fan speed.
+
+Upstream-Status: Inappropriate [platform-specific]
+
+---
+--- a/ipmi-allowlist.conf
++++ b/ipmi-allowlist.conf
+@@ -175,6 +175,7 @@
+ 0x2c:0x10:0xff7f   //<Group Extension>:<DCMI Get Temperature Readings>
+ 0x2c:0x11:0xff7f   //<Group Extension>:<DCMI Get DCMI Config Params>
+ 0x2c:0x12:0x7f7f   //<Group Extension>:<DCMI Set DCMI Config Params>
++0x2e:0x04:0x7f7f   //<OpenBMC OEM>:<Fan Control - manual mode / set PWM duty>
+ 0x2e:0x80:0x8080   //<OpenBMC OEM>:<IPMI Blob Transfer - allow BIOS SMBIOS push via KCS/SMM>
+ 0x2e:0xC0:0x7f7f   //<Intel OEM>:<Enable/Disable Node Manager Policy Control>
+ 0x2e:0xC1:0x7f7f   //<Intel OEM>:<Set Node Manager Policy>
