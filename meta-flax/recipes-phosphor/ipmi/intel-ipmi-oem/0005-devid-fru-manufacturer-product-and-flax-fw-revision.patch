@@ -11,8 +11,10 @@ Firmware Revision 0.00 on TiogaPass.  Three fixes:
    /var/cache/private/manufID and /var/cache/private/prodID; this handler reads
    them, keeping D-Bus out of the Get Device ID hot path.  dev_id.json supplies
    the fallback (Wiwynn) until the cache files appear.
-     Wiwynn -> manuf 40092 (0x9C9C), product 7220  (0x1C34)
-     Quanta -> manuf 40981 (0xA015), product 12614 (0x3146)
+     Wiwynn -> manuf 40092 (0x9C9C), product 7220 (0x1C34)
+     Quanta -> manuf 7244  (0x1C4C), product 7220 (0x1C34)
+   The product ID is the same on both on purpose: the BIOS keys its platform
+   check on it.  See flax-ipmi-devid-manuf.sh for why.
    The old /var/cache/private/prodID reader was hard-capped at 4 characters
    (std::string id = "0x00"), which truncated 0x1C34/0x3146; it is replaced.
    Product ID also gains a dev_id.json "prod_id" fallback.
