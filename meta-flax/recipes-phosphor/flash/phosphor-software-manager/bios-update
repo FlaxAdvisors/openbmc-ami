@@ -31,6 +31,24 @@
 # written in full, as it must be.  We compare the ME region against the chip
 # before flashing so we know which case this is, and cycle the node through the
 # hot-swap controller afterwards only when the ME actually changed.
+#
+# That comparison alone is not enough in practice.  The ME rewrites its own MFS
+# while it runs -- on standby power, not just while the host is up -- so on any
+# box that has ever booted, the chip's ME region has drifted from the pristine
+# copy in the image and `flashcp -p` rewrites it.  Measured on 172.17.6.101
+# 2026-09-22: a BIOS-only change still showed the ME as DIFFERS and locked the
+# node out; the hot-swap cycle that was supposed to recover it silently did
+# nothing on that board, so it took a physical reseat.  The "same-ME update
+# skips the ME" case therefore never actually fires in the field.
+#
+# The fix is to stop asking the ME to be identical and simply not touch it: we
+# splice the *chip's current* ME region into a scratch copy of the image and
+# flash that.  flashcp -p then finds zero differing eraseblocks in the ME, so
+# the region is never rewritten, no G3 is needed, and every block that IS
+# written still gets flashcp's read-back verification.  A genuinely new ME can
+# still be written on purpose with BIOS_UPDATE_WRITE_ME=1.  If anything about
+# the splice fails we fall back to flashing the image as-is and cycling the
+# node -- the old behaviour, which is safe but expensive.
 
 set -e
 
@@ -45,10 +63,15 @@ IMAGE_FILE="${IMAGE_DIR}/image-bios"
 #                                      systemd can mark this unit "done" and
 #                                      phosphor-software-manager can record the
 #                                      new BIOS version first.  Default 20.
+#   BIOS_UPDATE_WRITE_ME=1          -- actually write the image's ME region
+#                                      instead of preserving the chip's.  Only
+#                                      for an image that carries a genuinely new
+#                                      ME; costs a G3.  Default 0 (preserve).
 # shellcheck disable=SC1091
 [ -r /etc/default/bios-update ] && . /etc/default/bios-update
 AUTO_POWER_CYCLE="${BIOS_UPDATE_AUTO_POWER_CYCLE:-1}"
 CYCLE_DELAY_S="${BIOS_UPDATE_CYCLE_DELAY_S:-20}"
+WRITE_ME="${BIOS_UPDATE_WRITE_ME:-0}"
 
 # ADM1275 hot-swap controller.  Writing 0x0c to manufacturer register 0xd9 makes
 # it drop and restore its own output = a real G3 for the whole node, which is
@@ -141,14 +164,23 @@ read_u32le() {          # $1 = file, $2 = byte offset -> decimal value on stdout
 }
 
 me_region() {           # $1 = image -> "<base> <length>" in bytes on stdout
-    local f="${1}" sig flmap0 frba flreg2 base limit
+    flreg_region "${1}" 8
+}
+
+# FLREG1 (BIOS) lives at FRBA+4, FLREG2 (ME) at FRBA+8 — same encoding.
+bios_region() {         # $1 = image -> "<base> <length>" in bytes on stdout
+    flreg_region "${1}" 4
+}
+
+flreg_region() {        # $1 = image, $2 = FLREG byte offset from FRBA
+    local f="${1}" off="${2}" sig flmap0 frba flreg base limit
     sig=$(read_u32le "${f}" 16) || return 1
     [ "${sig}" -eq $(( 0x0FF0A55A )) ] || return 1
     flmap0=$(read_u32le "${f}" 20) || return 1
     frba=$(( ((flmap0 >> 16) & 0xff) << 4 ))
-    flreg2=$(read_u32le "${f}" $(( frba + 8 ))) || return 1
-    base=$(( (flreg2 & 0x7fff) << 12 ))
-    limit=$(( (((flreg2 >> 16) & 0x7fff) << 12) | 0xfff ))
+    flreg=$(read_u32le "${f}" $(( frba + off ))) || return 1
+    base=$(( (flreg & 0x7fff) << 12 ))
+    limit=$(( (((flreg >> 16) & 0x7fff) << 12) | 0xfff ))
     [ "${base}" -lt "${limit}" ] || return 1    # region marked unused
     echo "${base} $(( limit - base + 1 ))"
 }
@@ -185,9 +217,130 @@ detect_me_change() {
              "no power cycle needed"
     else
         ME_STATE="changed"
-        echo "bios-update: ME region DIFFERS — the node must go through G3 after" \
-             "the flash or it will not power on"
+        echo "bios-update: ME region DIFFERS from the chip"
     fi
+}
+
+# ── preserve everything below the BIOS region ────────────────────────────────
+# A BIOS update only needs to write the BIOS region.  Everything below it on
+# this chip -- descriptor, GbE, ME, Region5 and the unassigned span above the ME
+# -- belongs to the platform and drifts at runtime, so writing it back from the
+# image is both unnecessary and what triggers the PCH's G3 demand.
+#
+# Restricting this to the ME region alone is not enough: measured against a real
+# chip dump, four eraseblocks OUTSIDE the descriptor's ME region (Region5 at
+# 0xa30000-0xa50000 and 0xff0000) had also drifted.  Preserving only the ME
+# would rewrite those while reporting "no cycle needed".
+#
+# So: copy the image, overwrite everything below the BIOS region in that copy
+# with what the chip currently holds, and flash the copy.  flashcp -p then
+# writes BIOS-region blocks only.
+#
+# Guards, all of which fall back to flashing the image as-is and cycling:
+#   - the chip must already carry a valid descriptor whose BIOS region matches
+#     the image's, otherwise we would be mixing two different layouts (and a
+#     blank/new chip legitimately needs the whole image written);
+#   - the copy is verified against the chip before it is accepted, because a
+#     half-spliced image would rewrite the ME *and* report that it had not.
+
+ME_PRESERVED_FILE=""
+
+preserve_chip_me() {
+    local region base len blk cnt tmp avail_kb need_kb chip_region
+
+    if ! region=$(bios_region "${IMAGE_FILE}"); then
+        echo "bios-update: cannot locate the BIOS region in the image —" \
+             "flashing it as-is"
+        return 1
+    fi
+    if ! chip_region=$(bios_region "${PNOR_DEV}"); then
+        echo "bios-update: the chip has no usable descriptor (blank or new?) —" \
+             "flashing the image in full"
+        return 1
+    fi
+    if [ "${region}" != "${chip_region}" ]; then
+        echo "bios-update: image and chip disagree on the BIOS region" \
+             "(${region} vs ${chip_region}) — flashing the image in full"
+        return 1
+    fi
+
+    # Everything below the BIOS region is what we keep from the chip.
+    base=0
+    len="${region% *}"
+    if [ "${len}" -le 0 ] || [ $(( len % 4096 )) -ne 0 ]; then
+        echo "bios-update: BIOS region does not start on a 4 KiB boundary above 0" \
+             "— flashing the image as-is"
+        return 1
+    fi
+
+    # The image must actually contain that span, or dd would extend it.
+    if [ "$(stat -c %s "${IMAGE_FILE}" 2>/dev/null || echo 0)" -lt $(( base + len )) ]; then
+        echo "bios-update: image is shorter than its own BIOS region base —" \
+             "flashing it as-is"
+        return 1
+    fi
+
+    # /tmp is a tmpfs and the image is ~32 MB; do not fill RAM.
+    need_kb=$(( ( $(stat -c %s "${IMAGE_FILE}") / 1024 ) + 4096 ))
+    avail_kb=$(df -k "${IMAGE_DIR}" 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -z "${avail_kb}" ] || [ "${avail_kb}" -lt "${need_kb}" ]; then
+        echo "bios-update: not enough space for an ME-preserving copy" \
+             "(need ${need_kb} KiB, have ${avail_kb:-0} KiB) — flashing the image as-is"
+        return 1
+    fi
+
+    tmp="${IMAGE_DIR}/image-bios.me-preserved"
+    rm -f "${tmp}"
+    ME_PRESERVED_FILE="${tmp}"          # so cleanup() removes it on any exit
+
+    cnt=$(( len / 4096 ))
+    printf 'bios-update: preserving chip bytes 0x%08x-0x%08x (%s KiB: descriptor, GbE, ME, pre-BIOS)\n' \
+        "${base}" "$(( base + len - 1 ))" "$(( len / 1024 ))"
+
+    # Build the spliced image by concatenation: the preserved span always starts
+    # at offset 0, so this needs no in-place patching.  That matters -- BusyBox
+    # dd here is built without conv= support at all ("Usage: dd [if=FILE]
+    # [of=FILE] [bs=N] [count=N] [skip=N] [seek=N]"), so conv=notrunc fails, and
+    # it silently cost us a working splice until it was tested on the BMC.  As a
+    # bonus this skips a 32 MB copy.
+    if ! { dd if="${PNOR_DEV}"   bs=4096 count="${cnt}" 2>/dev/null &&
+           dd if="${IMAGE_FILE}" bs=4096 skip="${cnt}"  2>/dev/null ; } > "${tmp}"
+    then
+        echo "bios-update: splice failed — flashing the original image as-is"
+        rm -f "${tmp}"; ME_PRESERVED_FILE=""
+        return 1
+    fi
+    sync
+
+    # Prove it: same size, preserved span identical to the chip, and the rest
+    # still the image's.
+    if [ "$(stat -c %s "${tmp}" 2>/dev/null)" != "$(stat -c %s "${IMAGE_FILE}")" ]; then
+        echo "bios-update: spliced image is the wrong size — flashing the original as-is"
+        rm -f "${tmp}"; ME_PRESERVED_FILE=""
+        return 1
+    fi
+    if ! dd if="${tmp}" bs=4096 count="${cnt}" 2>/dev/null \
+         | cmp -s - <(dd if="${PNOR_DEV}" bs=4096 count="${cnt}" 2>/dev/null)
+    then
+        echo "bios-update: splice did not verify against the chip —" \
+             "flashing the original image as-is"
+        rm -f "${tmp}"; ME_PRESERVED_FILE=""
+        return 1
+    fi
+    if ! dd if="${tmp}" bs=4096 skip="${cnt}" 2>/dev/null \
+         | cmp -s - <(dd if="${IMAGE_FILE}" bs=4096 skip="${cnt}" 2>/dev/null)
+    then
+        echo "bios-update: spliced image lost the new BIOS region —" \
+             "flashing the original image as-is"
+        rm -f "${tmp}"; ME_PRESERVED_FILE=""
+        return 1
+    fi
+
+    IMAGE_FILE="${tmp}"
+    ME_STATE="unchanged"
+    echo "bios-update: ME and descriptor preserved — flashcp will write the BIOS" \
+         "region only, no power cycle needed"
+    return 0
 }
 
 # ── hot-swap controller node cycle ───────────────────────────────────────────
@@ -262,6 +415,9 @@ cleanup() {
     fi
     # Always restore the watchdog, even on a failed/partial flash (idempotent).
     wdt_rearm 2>/dev/null || true
+    # The ME-preserving copy is ~32 MB of tmpfs; never leave it behind.
+    [ -n "${ME_PRESERVED_FILE}" ] && rm -f "${ME_PRESERVED_FILE}" 2>/dev/null
+    return 0
 }
 trap cleanup EXIT
 
@@ -330,6 +486,23 @@ fi
 # Must run before the flash, while the chip still holds the outgoing image.
 
 detect_me_change
+
+# If it differs, preserve the chip's ME rather than rewriting it, so the node
+# does not need a G3.  preserve_chip_me() flips ME_STATE back to "unchanged"
+# only once it has verified the spliced copy against the chip.
+if [ "${ME_STATE}" = "changed" ]; then
+    if [ "${WRITE_ME}" = "1" ]; then
+        echo "bios-update: BIOS_UPDATE_WRITE_ME=1 — writing the image's ME region;" \
+             "the node will need a G3 afterwards"
+    else
+        preserve_chip_me || true
+    fi
+fi
+
+if [ "${ME_STATE}" = "changed" ]; then
+    echo "bios-update: the ME region will be rewritten — the node must go through" \
+         "G3 after the flash or it will not power on"
+fi
 
 echo "bios-update: flashing ${IMAGE_FILE} → ${PNOR_DEV}"
 
