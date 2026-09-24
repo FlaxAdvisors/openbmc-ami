@@ -22,8 +22,10 @@ Then reboot the BMC, as the Redfish reset and the WebUI button do (bmcweb
 follows Reset() with doBMCGracefulRestart).  An operator who asked for a
 factory reset expects it to happen, and arming a reset that only fires at some
 later, unrelated reboot is a trap.  The reboot is requested from the BMC state
-manager (RequestedBMCTransition = Reboot) two seconds after the handler returns,
-so the IPMI response reaches the caller before the BMC goes down.
+manager (RequestedBMCTransition = Reboot) by a transient systemd timer
+(systemd-run --on-active=2), so the IPMI response reaches the caller before
+the BMC goes down and the request does not depend on ipmid's event loop.  An
+in-process asio timer was tried first and on hardware never issued the Set.
 
 The status subcommand now reads openbmconce back rather than stat-ing the dead
 file, because nothing else holds that state -- the key is consumed by the
@@ -33,18 +35,10 @@ Upstream-Status: Inappropriate [platform-specific]
 
 ---
 diff --git a/src/oemcommands.cpp b/src/oemcommands.cpp
-index d0158de8..65ff51a8 100644
+index d0158de8..f5a6ed95 100644
 --- a/src/oemcommands.cpp
 +++ b/src/oemcommands.cpp
-@@ -22,6 +22,7 @@
- #include <systemd/sd-journal.h>
- 
- #include <appcommands.hpp>
-+#include <boost/asio/steady_timer.hpp>
- #include <boost/container/flat_map.hpp>
- #include <boost/process/child.hpp>
- #include <boost/process/io.hpp>
-@@ -3114,6 +3115,99 @@ ipmi::RspType<> ipmiSetSecurityMode(ipmi::Context::ptr& ctx,
+@@ -3114,6 +3114,95 @@ ipmi::RspType<> ipmiSetSecurityMode(ipmi::Context::ptr& ctx,
      return ipmi::responseSuccess();
  }
  
@@ -100,51 +94,47 @@ index d0158de8..65ff51a8 100644
 +/*
 + * Reboot the BMC shortly after a factory reset is armed, the same way the
 + * Redfish/WebUI reset does (bmcweb doBMCGracefulRestart): request a Reboot
-+ * transition from the BMC state manager.  Deferred so the IPMI response is on
-+ * the wire before the BMC goes down -- the caller gets its completion code
-+ * rather than a dropped session.
++ * transition from the BMC state manager.
++ *
++ * Deferred through a transient systemd timer rather than an asio timer inside
++ * ipmid: the IPMI response has to be on the wire before the BMC starts going
++ * down, and the request must not depend on ipmid's own event loop -- an
++ * in-process timer was observed on hardware never to issue the Set.  This is
++ * the same mechanism bios-update uses for its post-flash node cycle.
 + */
 +static void scheduleBmcReboot()
 +{
-+    static constexpr auto rebootDelay = std::chrono::seconds(2);
-+
-+    auto io = getIoContext();
-+    auto bus = getSdBus();
-+    if (!io || !bus)
++    try
++    {
++        boost::process::child c(
++            "/usr/bin/systemd-run", "--on-active=2",
++            "--unit=flax-factory-reset-reboot", "/usr/bin/busctl",
++            "set-property", "xyz.openbmc_project.State.BMC",
++            "/xyz/openbmc_project/state/bmc0", "xyz.openbmc_project.State.BMC",
++            "RequestedBMCTransition", "s",
++            "xyz.openbmc_project.State.BMC.Transition.Reboot");
++        c.wait();
++        if (c.exit_code() != 0)
++        {
++            phosphor::logging::log<phosphor::logging::level::ERR>(
++                "ipmiRestoreConfiguration: could not schedule the BMC reboot; "
++                "reboot the BMC manually",
++                phosphor::logging::entry("RC=%d", c.exit_code()));
++        }
++    }
++    catch (const std::exception& e)
 +    {
 +        phosphor::logging::log<phosphor::logging::level::ERR>(
-+            "ipmiRestoreConfiguration: no io context; reboot the BMC manually");
-+        return;
++            "ipmiRestoreConfiguration: could not schedule the BMC reboot; "
++            "reboot the BMC manually",
++            phosphor::logging::entry("ERROR=%s", e.what()));
 +    }
-+
-+    auto timer = std::make_shared<boost::asio::steady_timer>(*io, rebootDelay);
-+    timer->async_wait([timer, bus](const boost::system::error_code& ec) {
-+        if (ec)
-+        {
-+            return;
-+        }
-+        bus->async_method_call(
-+            [](const boost::system::error_code& ec2) {
-+                if (ec2)
-+                {
-+                    phosphor::logging::log<phosphor::logging::level::ERR>(
-+                        "ipmiRestoreConfiguration: BMC reboot request failed",
-+                        phosphor::logging::entry("ERROR=%s",
-+                                                 ec2.message().c_str()));
-+                }
-+            },
-+            "xyz.openbmc_project.State.BMC", "/xyz/openbmc_project/state/bmc0",
-+            "org.freedesktop.DBus.Properties", "Set",
-+            "xyz.openbmc_project.State.BMC", "RequestedBMCTransition",
-+            std::variant<std::string>(
-+                "xyz.openbmc_project.State.BMC.Transition.Reboot"));
-+    });
 +}
 +
  ipmi::RspType<uint8_t /* restore status */>
      ipmiRestoreConfiguration(const std::array<uint8_t, 3>& clr, uint8_t cmd)
  {
-@@ -3128,8 +3222,6 @@ ipmi::RspType<uint8_t /* restore status */>
+@@ -3128,8 +3217,6 @@ ipmi::RspType<uint8_t /* restore status */>
      constexpr uint8_t cmdFullRestore = 0xbb;
      constexpr uint8_t cmdFormat = 0xcc;
  
@@ -153,7 +143,7 @@ index d0158de8..65ff51a8 100644
      switch (cmd)
      {
          case cmdStatus:
-@@ -3138,19 +3230,36 @@ ipmi::RspType<uint8_t /* restore status */>
+@@ -3138,19 +3225,36 @@ ipmi::RspType<uint8_t /* restore status */>
          case cmdFullRestore:
          case cmdFormat:
          {
@@ -196,7 +186,7 @@ index d0158de8..65ff51a8 100644
              break;
          }
          default:
-@@ -3160,10 +3269,8 @@ ipmi::RspType<uint8_t /* restore status */>
+@@ -3160,10 +3264,8 @@ ipmi::RspType<uint8_t /* restore status */>
      constexpr uint8_t restorePending = 0;
      constexpr uint8_t restoreComplete = 1;
  
