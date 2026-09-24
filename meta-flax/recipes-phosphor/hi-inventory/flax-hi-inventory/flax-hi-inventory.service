@@ -3,6 +3,14 @@ Description=Publish host-interface inventory on D-Bus
 Documentation=file:///usr/share/doc/flax-hi-inventory
 Wants=xyz.openbmc_project.Inventory.Manager.service
 After=xyz.openbmc_project.Inventory.Manager.service
+# flax-hi-inventory.path starts this on every write of collections/.updated.
+# A BIOS push -- especially the first after a factory reset, with nothing yet
+# published -- touches it many times in a few seconds, and systemd's default
+# start limit (5 in 10 s) then fails the unit with 'start-limit-hit' and ignores
+# every later trigger: Redfish shows 1 DIMM and 0 CPUs until someone restarts
+# it.  Each run republishes the whole tree and is idempotent, so a burst of
+# runs is harmless; never rate-limit it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
