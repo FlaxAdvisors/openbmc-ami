@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000026 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Wed, 10 Sep 2026 00:00:00 +0000
+Subject: [PATCH] fbtp: add missing Labels allowlist to the PCH VR
+
+Every pmbus block in fbtp.json carries a "Labels" allowlist naming the
+hwmon labels psusensor should expose - except MB_VR_PCH_PVNN /
+MB_VR_PCH_P1V05 at 0x68.  Without it psusensor instantiates *every*
+in*_input on the chip, including the 12 V input rails vin1/vin2, and two
+upstream dbus-sensors defects then combine to bind the wrong file:
+
+  1. PSUSensorMain.cpp:676 looks the hwmon label up in labelMatch, but
+     that table is keyed "vin"/"vout" while the label file says "vin1"/
+     "vout1".  The lookup misses and both fall back to labelMatch["in"]
+     = PSUProperty("Output Voltage", 255, 0, 3, 0), so vin1 and vout1
+     compose the *identical* sensor name "MB_VR_PCH_PVNN Output Voltage"
+     (and vin2/vout2 collide on MB_VR_PCH_P1V05).
+
+  2. On a host power-on the daemon re-scans with activateOnly=true
+     (PSUSensorMain.cpp:1149) and PSUSensor::activate() early-returns on
+     an already-active sensor, so the *first* file in readdir order wins.
+     On this board readdir yields in2,in5,in3,in6,in1,in4 - the vin
+     files come first, and the vout rebind is silently discarded.
+
+The sensor therefore reads the 12 V input rail while keeping vout1's
+1.1 V critical threshold, and asserts "Upper Critical going high,
+Reading 12 > Threshold 1 Volts" on both rails at every host power-on,
+deasserting only at power-off.  The PCH rails themselves are fine
+(vout1 = 1.000 V, vout2 = 1.050 V, confirmed against the independent
+ADC sensors MB_PVNN_PCH_STBY and MB_P1V05).
+
+Give 0x68 the same allowlist the other dual-output VRs (0x48, 0x58)
+already have.  The vin files are then skipped at PSUSensorMain.cpp:663,
+there is no name collision left to lose the race on, and the sensors
+bind to vout1/vout2 as intended.
+
+Upstream-Status: Inappropriate [platform configuration]
+---
+ configurations/fbtp.json | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -1299,6 +1299,16 @@
+     {
+       "Address": "0x68",
+       "Bus": 5,
++      "Labels": [
++        "iout1",
++        "iout2",
++        "pout1",
++        "pout2",
++        "vout1",
++        "vout2",
++        "temp1",
++        "temp2"
++      ],
+       "Name": "MB_VR_PCH_PVNN",
+       "Name1": "MB_VR_PCH_P1V05",
+       "Thresholds": [

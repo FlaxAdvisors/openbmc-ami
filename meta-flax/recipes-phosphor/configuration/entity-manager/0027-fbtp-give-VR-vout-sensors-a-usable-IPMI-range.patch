@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000027 Mon Sep 17 00:00:00 2001
+From: flax <flax@tiogapass>
+Date: Wed, 10 Sep 2026 00:00:00 +0000
+Subject: [PATCH] fbtp: give the VR vout sensors a usable IPMI range
+
+Every pmbus voltage sensor inherits MaxValue = 255 / MinValue = 0 from
+the dbus-sensors default table (PSUSensorMain.cpp:1117,
+{"in", PSUProperty("Output Voltage", 255, 0, 3, 0)}).  IPMI encodes an
+analog sensor as a single byte spanning MinValue..MaxValue, so that is
+exactly one volt per count - and every VR rail on this board sits
+between 0.9 V and 1.9 V.  The result is that `ipmitool sensor list`
+reports a 1.05 V rail and its 1.15 V critical threshold as the same
+number:
+
+  MB VR PCH PVNN O | 1.000 | Volts | ... LowerNC 1.000 ... UpperC 1.000
+
+while the ADC sensor for the same rail, which has a sane range, reads
+  MB PVNN PCH STB  | 0.994 | Volts | ...  0.760  ...        1.101
+
+Threshold *detection* is unaffected - dbus-sensors compares the raw
+double in Thresholds.cpp:392 and never consults MaxValue - so this is a
+reporting defect, not a monitoring gap.  But every IPMI-only consumer
+(ipmitool, the SDR, IPMI-sourced SEL text) sees the quantised value.
+
+dbus-sensors honours a per-label <label>_Max override
+(PSUSensorMain.cpp:706, applied at 757-785).  Set it just above each
+rail's upper-critical threshold: 3 V for the VCCIN rails (critical
+2.05 V) and 2 V for the rest (criticals 1.1-1.32 V).  That gives
+8-12 mV per count instead of 1000 mV.
+
+Upstream-Status: Inappropriate [platform configuration]
+---
+ configurations/fbtp.json | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+--- a/configurations/fbtp.json
++++ b/configurations/fbtp.json
+@@ -1004,6 +1004,8 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 3,
++      "vout2_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1054,6 +1056,7 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1104,6 +1107,7 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1154,6 +1158,7 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1244,6 +1249,8 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 3,
++      "vout2_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1294,6 +1301,7 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1384,6 +1392,8 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
++      "vout2_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1434,6 +1444,7 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
+       "Type": "pmbus"
+     },
+     {
+@@ -1484,6 +1495,7 @@
+         }
+       ],
+       "PowerState": "On",
++      "vout1_Max": 2,
+       "Type": "pmbus"
+     },
+     {

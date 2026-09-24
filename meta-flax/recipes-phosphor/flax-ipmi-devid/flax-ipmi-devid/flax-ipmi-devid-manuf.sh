@@ -29,9 +29,21 @@
 # meta-facebook's dev_id.json.  Tioga Pass is a Facebook OCP design, but the
 # board in the chassis is a Quanta board and that is what we report.
 #
-# The Product IDs are still the per-vendor values the stock images use (0x1C34
-# Wiwynn, 0x3146 Facebook/Tioga Pass); no Quanta-assigned product ID for this
-# platform is known, and inventing one would be worse than carrying this over.
+# The Product ID is 0x1C34 (7220) on BOTH vendors, and must stay that way.
+# It is not cosmetic: the BIOS keys its "is this my platform?" check on the
+# Product ID, and 0x1C34 is literally 7220 = "SV7220G3", the identity this
+# BIOS hardcodes on every one of these boards regardless of who built them.
+# Report anything else and the BIOS does not recognise itself, retries Get
+# Device ID about a dozen times, and then NEVER READS FRU AT ALL -- so the
+# host ends up with no SMBIOS system serial, which is what gouda's inventory
+# (dmidecode -s system-serial-number) reads.
+#
+# Earlier builds reported 0x3146 (12614, the Facebook/Tioga Pass product ID
+# inherited from meta-facebook's dev_id.json) on Quanta boards and broke
+# exactly that way; proven on .24.103 on 2026-09-22, where manuf 7244 with
+# prod 7220 reads FRU and reports the serial.  The manufacturer is NOT what
+# the BIOS keys on -- 7244 is truthful and works -- so do not "fix" this by
+# reporting Wiwynn on a Quanta board.
 #   unknown/unreadable -> Wiwynn defaults (never report Intel)
 #
 # Output (decimal): /var/cache/private/manufID and /var/cache/private/prodID
@@ -120,9 +132,9 @@ ELAPSED=$(( $(date +%s) - START ))
 
 MFG_LC=$(echo "$MFG" | tr 'A-Z' 'a-z')
 case "$MFG_LC" in
-    *wiwynn*) MID=40092; PID=7220  ;;   # Wiwynn Corporation  / 0x1C34
-    *quanta*) MID=7244;  PID=12614 ;;   # Quanta Computer Inc. / 0x3146
-    *)        MID=40092; PID=7220  ;;   # default: Wiwynn
+    *wiwynn*) MID=40092; PID=7220 ;;    # Wiwynn Corporation  / 0x1C34
+    *quanta*) MID=7244;  PID=7220 ;;    # Quanta Computer Inc. / 0x1C34
+    *)        MID=40092; PID=7220 ;;    # default: Wiwynn
 esac
 
 mkdir -p "$CACHE_DIR"

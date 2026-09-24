@@ -1,0 +1,149 @@
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] Restore Configuration: trigger the factory reset that this
+ platform actually has
+
+NetFn 0x30 / cmd 0x02 has always been registered and allowlisted, and it looks
+like a working factory reset -- it takes the 'C','L','R' confirmation and the
+0xAA/0xBB/0xCC operations, and it answers with a plausible status byte.  It
+does nothing.  All it does is write /tmp/.rwfs/.restore_op, and nothing in this
+image reads that file: the path belongs to Intel's FWUPD_INTEL_FEATURES rwfs
+layout, which is disabled in this build, so on TiogaPass the directory does not
+exist and the write simply fails.
+
+The reset this platform does have is the one Redfish drives, via
+xyz.openbmc_project.Common.FactoryReset Reset() on the software manager.  On a
+static-norootfs machine that sets the U-Boot one-shot key openbmconce to
+factory-reset; the initramfs step 21-factory-reset reads the key on the next
+boot and 30-ubiattach-or-format then runs ubiformat on the rwfs volume, which
+discards the upper layer of the /etc, /var and /home overlays.  Call that
+instead of writing the dead file.
+
+Deliberately no reboot.  bmcweb follows its Reset() with a graceful restart, so
+the Redfish button reboots the BMC on the operator's behalf; a raw IPMI command
+that silently drops the BMC is a worse default, and the reset is armed either
+way.  The operator reboots when ready.  This is a deliberate difference in
+behaviour between the two paths, not an oversight.
+
+The status subcommand now reads openbmconce back rather than stat-ing the dead
+file, because nothing else holds that state -- the key is consumed by the
+initramfs and cleared by clear-once.service.
+
+Upstream-Status: Inappropriate [platform-specific]
+
+---
+--- a/src/oemcommands.cpp
++++ b/src/oemcommands.cpp
+@@ -3114,6 +3114,55 @@
+     return ipmi::responseSuccess();
+ }
+ 
++static constexpr const char* factoryResetService =
++    "xyz.openbmc_project.Software.BMC.Updater";
++static constexpr const char* factoryResetPath = "/xyz/openbmc_project/software";
++static constexpr const char* factoryResetIntf =
++    "xyz.openbmc_project.Common.FactoryReset";
++static constexpr const char* factoryResetEnvName = "openbmconce";
++static constexpr const char* factoryResetEnvValue = "factory-reset";
++
++/*
++ * True when a factory reset is armed but has not happened yet.
++ *
++ * FactoryReset.Reset() arms the reset by setting the U-Boot one-shot key
++ * openbmconce to factory-reset.  The initramfs step 21-factory-reset consumes
++ * that key on the next boot and clear-once.service clears it afterwards, so
++ * reading the key back is the only honest source for "pending" -- there is no
++ * daemon holding that state.
++ */
++static bool factoryResetArmed()
++{
++    try
++    {
++        boost::process::ipstream is;
++        boost::process::child c(fwGetEnvCmd, "-n", factoryResetEnvName,
++                                boost::process::std_out > is);
++
++        bool armed = false;
++        std::string line;
++        while (c.running() && std::getline(is, line))
++        {
++            if (line.find(factoryResetEnvValue) != std::string::npos)
++            {
++                armed = true;
++            }
++        }
++        c.wait();
++
++        // fw_printenv exits non-zero when the key is simply unset, which is
++        // the ordinary "nothing armed" case rather than an error.
++        return c.exit_code() == 0 && armed;
++    }
++    catch (const std::exception& e)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "ipmiRestoreConfiguration: cannot read U-Boot environment",
++            phosphor::logging::entry("ERROR=%s", e.what()));
++        return false;
++    }
++}
++
+ ipmi::RspType<uint8_t /* restore status */>
+     ipmiRestoreConfiguration(const std::array<uint8_t, 3>& clr, uint8_t cmd)
+ {
+@@ -3128,8 +3177,6 @@
+     constexpr uint8_t cmdFullRestore = 0xbb;
+     constexpr uint8_t cmdFormat = 0xcc;
+ 
+-    constexpr const char* restoreOpFname = "/tmp/.rwfs/.restore_op";
+-
+     switch (cmd)
+     {
+         case cmdStatus:
+@@ -3138,14 +3185,30 @@
+         case cmdFullRestore:
+         case cmdFormat:
+         {
+-            // write file to rwfs root
+-            int value = (cmd - 1) & 0x03; // map aa, bb, cc => 1, 2, 3
+-            std::ofstream restoreFile(restoreOpFname);
+-            if (!restoreFile)
++            /*
++             * All three operations do the same thing here.  Upstream
++             * distinguishes a default restore, a full restore and a format,
++             * but this platform has exactly one reset -- ubiformat of the rwfs
++             * volume -- so the distinction has nothing to select.  They are all
++             * accepted rather than rejected so that existing tooling built
++             * against the Intel command keeps working.
++             */
++            std::shared_ptr<sdbusplus::asio::connection> busp = getSdBus();
++
++            try
++            {
++                auto method = busp->new_method_call(
++                    factoryResetService, factoryResetPath, factoryResetIntf,
++                    "Reset");
++                busp->call(method);
++            }
++            catch (const std::exception& e)
+             {
++                phosphor::logging::log<phosphor::logging::level::ERR>(
++                    "ipmiRestoreConfiguration: FactoryReset failed",
++                    phosphor::logging::entry("ERROR=%s", e.what()));
+                 return ipmi::responseUnspecifiedError();
+             }
+-            restoreFile << value << "\n";
+ 
+             phosphor::logging::log<phosphor::logging::level::WARNING>(
+                 "Restore to default will be performed on next BMC boot",
+@@ -3160,10 +3223,8 @@
+     constexpr uint8_t restorePending = 0;
+     constexpr uint8_t restoreComplete = 1;
+ 
+-    uint8_t restoreStatus = std::filesystem::exists(restoreOpFname)
+-                                ? restorePending
+-                                : restoreComplete;
+-    return ipmi::responseSuccess(restoreStatus);
++    return ipmi::responseSuccess(factoryResetArmed() ? restorePending
++                                                     : restoreComplete);
+ }
+ 
+ ipmi::RspType<uint8_t> ipmiOEMGetNmiSource(void)

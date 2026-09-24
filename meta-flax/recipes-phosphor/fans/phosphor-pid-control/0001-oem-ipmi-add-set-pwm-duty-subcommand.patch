@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] oem-ipmi: add a set-PWM-duty subcommand to the fan control
+ command
+
+The OEM IPMI command this library already registers -- NetFn 0x2E, OEM group
+IANA 49871 (OpenBMC), command 0x04 -- can put a zone into manual mode but has
+no way to then say what the fans should do.  Manual mode alone just freezes
+the outputs wherever the PID loop last left them, so the command is not much
+use on its own and the only way to finish the job was a busctl call on the
+BMC itself.
+
+Add subcommand 3, setPwmDuty, which writes a raw 0-255 duty cycle to the
+Control.FanPwm Target property of one PWM output, or of every output present
+when the fan index is 0xff:
+
+    ipmitool raw 0x2e 0x04 0xcf 0xc2 0x00 0x03 <zone> <fan> <duty>
+
+There is deliberately no matching get.  The duty cycle is already readable as
+an ordinary IPMI sensor -- dbus-sensors publishes each PWM under
+/xyz/openbmc_project/sensors/fan_pwm/ and phosphor-ipmi-host maps fan_pwm to
+sensor type 'fan' -- so Get Sensor Reading already answers the question and a
+second path to the same number would only be one more thing to keep honest.
+
+Duty is raw 0-255 rather than a percentage because that is what the Target
+property holds; converting here would put a rounding step between the
+operator and the register for no gain.
+
+The subcommand does not switch the zone into manual mode as a side effect.
+Subcommand 1 exists for that, and a raw command that quietly disables a
+zone's thermal protection would be a poor place to hide the decision.
+
+The zone byte is validated against the zone's Control.Mode object, so a
+request naming a zone that does not exist is rejected rather than silently
+applied; it selects nothing beyond that, because PWM control objects are not
+zone-scoped.
+
+Upstream-Status: Inappropriate [platform-specific]
+
+---
+--- a/ipmi/manual_messages.hpp
++++ b/ipmi/manual_messages.hpp
+@@ -12,6 +12,7 @@
+     getControlState = 0,
+     setControlState = 1,
+     getFailsafeState = 2,
++    setPwmDuty = 3,
+ };
+ 
+ struct FanCtrlRequest
+@@ -27,5 +28,20 @@
+     uint8_t value;
+ } __attribute__((packed));
+ 
++/*
++ * setPwmDuty request.  'fan' is a 1-based PWM output index, or allFanPwm
++ * (0xff) for every PWM output present.  'value' is the raw duty cycle written
++ * to the Control.FanPwm Target property, 0-255.
++ */
++struct FanPwmRequestSet
++{
++    uint8_t command;
++    uint8_t zone;
++    uint8_t fan;
++    uint8_t value;
++} __attribute__((packed));
++
++constexpr uint8_t allFanPwm = 0xff;
++
+ } // namespace ipmi
+ } // namespace pid_control
+--- a/ipmi/control.hpp
++++ b/ipmi/control.hpp
+@@ -23,6 +23,11 @@
+     // and returns an IPMI code based on success or failure of this.
+     virtual uint8_t setFanCtrlProperty(uint8_t zoneId, bool value,
+                                        const std::string& property) = 0;
++
++    // Writes a raw duty cycle (0-255) to a PWM output's Target property and
++    // returns an IPMI code based on success or failure of this.  PWM outputs
++    // are not zone-scoped, so this takes a PWM index rather than a zone.
++    virtual uint8_t setFanPwm(uint8_t fan, uint8_t value) = 0;
+ };
+ 
+ } // namespace ipmi
+--- a/ipmi/dbus_mode.hpp
++++ b/ipmi/dbus_mode.hpp
+@@ -34,6 +34,16 @@
+ 
+     uint8_t setFanCtrlProperty(uint8_t zoneId, bool value,
+                                const std::string& property) override;
++
++    /*
++     * busctl set-property xyz.openbmc_project.FanSensor \
++     *     /xyz/openbmc_project/control/fanpwm/Pwm_1 \
++     *     xyz.openbmc_project.Control.FanPwm Target t 128
++     *
++     * Only takes effect while the owning zone is in manual mode; in automatic
++     * mode swampd overwrites Target on its next cycle.
++     */
++    uint8_t setFanPwm(uint8_t fan, uint8_t value) override;
+ };
+ 
+ } // namespace ipmi
+--- a/ipmi/dbus_mode.cpp
++++ b/ipmi/dbus_mode.cpp
+@@ -36,6 +36,11 @@
+ static constexpr auto manualProperty = "Manual";
+ static constexpr auto failsafeProperty = "FailSafe";
+ static constexpr auto propertiesintf = "org.freedesktop.DBus.Properties";
++static constexpr auto pwmObjectPath =
++    "/xyz/openbmc_project/control/fanpwm/Pwm_";
++static constexpr auto pwmBusName = "xyz.openbmc_project.FanSensor";
++static constexpr auto pwmIntf = "xyz.openbmc_project.Control.FanPwm";
++static constexpr auto pwmProperty = "Target";
+ 
+ using Property = std::string;
+ using Value = std::variant<bool>;
+@@ -104,5 +109,31 @@
+     return IPMI_CC_OK;
+ }
+ 
++uint8_t DbusZoneControl::setFanPwm(uint8_t fan, uint8_t value)
++{
++    /* Control.FanPwm Target is a uint64_t, not the bool used above. */
++    std::variant<uint64_t> v{static_cast<uint64_t>(value)};
++
++    std::string path = std::string(pwmObjectPath) + std::to_string(fan);
++
++    auto propertyWriteBus = sdbusplus::bus::new_system();
++    auto pimMsg = propertyWriteBus.new_method_call(pwmBusName, path.c_str(),
++                                                   propertiesintf, "Set");
++    pimMsg.append(pwmIntf);
++    pimMsg.append(pwmProperty);
++    pimMsg.append(v);
++
++    try
++    {
++        propertyWriteBus.call_noreply(pimMsg);
++    }
++    catch (const sdbusplus::exception_t& ex)
++    {
++        return IPMI_CC_INVALID;
++    }
++
++    return IPMI_CC_OK;
++}
++
+ } // namespace ipmi
+ } // namespace pid_control
+--- a/ipmi/manualcmds.hpp
++++ b/ipmi/manualcmds.hpp
+@@ -31,6 +31,9 @@
+     ipmi_ret_t setManualModeState(const uint8_t* reqBuf, uint8_t* replyBuf,
+                                   const size_t* dataLen);
+ 
++    ipmi_ret_t setFanPwmDuty(const uint8_t* reqBuf, uint8_t* replyBuf,
++                             size_t* dataLen);
++
+   private:
+     std::unique_ptr<ZoneControlInterface> _control;
+ };
+--- a/ipmi/manualcmds.cpp
++++ b/ipmi/manualcmds.cpp
+@@ -39,6 +39,9 @@
+ static constexpr auto manualProperty = "Manual";
+ static constexpr auto failsafeProperty = "FailSafe";
+ 
++/* Highest PWM index probed when the request targets every output. */
++static constexpr uint8_t maxFanPwm = 8;
++
+ ipmi_ret_t ZoneControlIpmiHandler::getFailsafeModeState(
+     const uint8_t* reqBuf, uint8_t* replyBuf, size_t* dataLen)
+ {
+@@ -120,7 +123,55 @@
+     return rc;
+ }
+ 
+-/* Three command packages: get, set true, set false */
++/*
++ * Write a raw duty cycle to one PWM output, or to every output present when
++ * 'fan' is allFanPwm.  This only sticks while the zone is in manual mode
++ * (subcommand setControlState); in automatic mode swampd overwrites Target on
++ * its next cycle.  The zone byte is validated against the zone's Control.Mode
++ * object so that a bad zone is rejected rather than silently ignored, but it
++ * selects nothing: PWM control objects are not zone-scoped.
++ */
++ipmi_ret_t ZoneControlIpmiHandler::setFanPwmDuty(
++    const uint8_t* reqBuf, [[maybe_unused]] uint8_t* replyBuf, size_t* dataLen)
++{
++    if (*dataLen < sizeof(struct FanPwmRequestSet))
++    {
++        return IPMI_CC_INVALID;
++    }
++
++    const auto request =
++        reinterpret_cast<const struct FanPwmRequestSet*>(&reqBuf[0]);
++
++    bool manual;
++    ipmi_ret_t rc =
++        _control->getFanCtrlProperty(request->zone, &manual, manualProperty);
++    if (rc)
++    {
++        return rc;
++    }
++
++    /* This command carries no response payload. */
++    *dataLen = 0;
++
++    if (request->fan != allFanPwm)
++    {
++        return _control->setFanPwm(request->fan, request->value);
++    }
++
++    /* Succeed if at least one PWM output accepted the write. */
++    bool any = false;
++    for (uint8_t fan = 1; fan <= maxFanPwm; fan++)
++    {
++        if (_control->setFanPwm(fan, request->value) == IPMI_CC_OK)
++        {
++            any = true;
++        }
++    }
++
++    return any ? IPMI_CC_OK : IPMI_CC_INVALID;
++}
++
++/* Four command packages: get, set true, set false, set pwm */
+ ipmi_ret_t manualModeControl(
+     ZoneControlIpmiHandler* handler, [[maybe_unused]] ipmi_cmd_t cmd,
+     const uint8_t* reqBuf, uint8_t* replyCmdBuf, size_t* dataLen)
+@@ -144,6 +195,8 @@
+             return handler->setManualModeState(reqBuf, replyCmdBuf, dataLen);
+         case getFailsafeState:
+             return handler->getFailsafeModeState(reqBuf, replyCmdBuf, dataLen);
++        case setPwmDuty:
++            return handler->setFanPwmDuty(reqBuf, replyCmdBuf, dataLen);
+         default:
+             rc = IPMI_CC_INVALID;
+     }
