@@ -1,0 +1,23 @@
+[Unit]
+Description=Clear one time boot overrides
+
+ConditionFileNotEmpty=/etc/fw_env.config
+RequiresMountsFor=/run /sbin /etc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# It took 7 seconds to erase and write flash, be conservative
+TimeoutStartSec=60
+Restart=no
+
+# Only rewrite the U-Boot environment when a one-shot key is actually set, so
+# an ordinary boot costs no flash erase.  Run twice, as upstream does, so both
+# redundant environment copies drop the key.
+ExecCondition=/sbin/fw_printenv -n openbmconce
+ExecStart=/sbin/fw_setenv openbmconce
+ExecStart=/sbin/fw_setenv openbmconce
+
+[Install]
+WantedBy=multi-user.target
