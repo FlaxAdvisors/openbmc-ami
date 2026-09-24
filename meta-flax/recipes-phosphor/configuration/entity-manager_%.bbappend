@@ -76,3 +76,21 @@ do_configure:prepend() {
         install -m 0444 ${WORKDIR}/${json} ${S}/configurations/
     done
 }
+
+# fru-device (AMI patch 0002-Add-Config-FRU-Support) reads
+# configurations/eeprom.json -- an optional list of EEPROMs to expose even when
+# blank, so they can be programmed over IPMI -- once at startup and again for
+# every unparseable EEPROM and every empty address of every raw bus scan.  With
+# the file absent it behaves as "none configured" but logs "JSON file not found"
+# each time: dozens of lines per rescan.  TiogaPass has no blank-FRU EEPROMs to
+# expose (AMI's own copy lists PSU FRUs on bus 7 0x50/0x51, which do not exist
+# here), so ship an empty list: same behaviour, no noise.  entity-manager also
+# loads it as a board config; without a Probe it is dropped silently.
+# Deliberately NOT named eeprom.json: meta-ami carries its own eeprom.json and
+# sits ahead of meta-flax in FILESPATH (this bbappend uses
+# FILESEXTRAPATHS:append), so "file://eeprom.json" silently fetched AMI's copy
+# -- two PSU FRUs that do not exist here.  A unique name cannot be shadowed.
+SRC_URI:append = " file://flax-eeprom-empty.json"
+do_install:append() {
+    install -m 0444 ${WORKDIR}/flax-eeprom-empty.json ${D}${datadir}/entity-manager/configurations/eeprom.json
+}
