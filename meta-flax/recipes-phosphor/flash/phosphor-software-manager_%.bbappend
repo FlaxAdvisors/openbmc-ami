@@ -14,6 +14,13 @@ SRC_URI += " \
     file://obmc-flash-host-bios@.service \
 "
 
+# Must be :append, not +=.  It modifies the Preserve/whitelist code that
+# meta-ami's 0010-update-whitelist-file-based-on-user-selection-and-tr.patch
+# adds, and meta-ami adds that patch with SRC_URI:append -- which is applied
+# after every += entry.  meta-flax's bbappend is parsed last (priority 20), so
+# this :append lands after AMI's.
+SRC_URI:append = " file://0013-factory-reset-only-arm-the-reset-no-live-deletes.patch"
+
 # bash: bios-update/backup-bmc-flash are bash scripts.  mtd-utils: flashcp.
 # i2c-tools: i2cset, for the post-ME-flash node cycle through the ADM1275 HSC.
 RDEPENDS:${PN}-updater += "bash mtd-utils i2c-tools"

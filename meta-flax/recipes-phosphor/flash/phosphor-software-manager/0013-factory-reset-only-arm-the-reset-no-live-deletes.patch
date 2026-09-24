@@ -1,0 +1,219 @@
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] factoryReset: only arm the reset; never delete live config
+
+AMI's patch 0010 made Helper::factoryReset() walk entity-manager's
+xyz.openbmc_project.Configuration.Preserve objects: preserved paths go into a
+whitelist for obmc-init.sh, and every path of a NON-preserved config is
+fs::remove_all()ed immediately -- on the running system, before any reboot.
+
+On TiogaPass (static-norootfs) that is all harm and no benefit.  The reset is
+a ubiformat of the whole rwfs volume by the initramfs; nothing reads the
+whitelist (it is written to /run/initramfs/rw/cow, which only obmc-init.sh
+uses), so nothing is ever preserved.  But the live deletions are real, and
+the shipped preserve_configuration.json has AUTHENTICATION isEnable=false
+covering /etc/pam.d/, /etc/passwd, /etc/shadow, /etc/group, /etc/gshadow and
+/etc/ipmi_pass, plus NETWORK covering /etc/systemd/network/ and /etc/hostname.
+/etc is an overlay, so removing them whites out the image defaults as well.
+
+Seen on .245 2026-09-24: the moment the reset was armed, console login failed
+with "PAM Failure", SSH closed before its banner, Redfish returned 401 and IPMI
+could not open a session -- and the BMC then did not reboot on its own, so it
+stayed unreachable until an AC cycle let the initramfs wipe the volume.
+
+Reduce factoryReset() to what this platform actually needs: set
+openbmconce=factory-reset.  The running system is left untouched until the
+reboot performs the reset.
+
+Upstream-Status: Inappropriate [platform-specific]
+---
+--- a/static/item_updater_helper.cpp
++++ b/static/item_updater_helper.cpp
+@@ -37,178 +37,16 @@
+ 
+ void Helper::factoryReset()
+ {
+-    // Update whitelist file
+-    #ifdef FWUPD_INTEL_FEATURES
+-        std::string whitelist = "/tmp/.rwfs/.restore_whitelist";
+-        std::string u_boot_bkup = "/tmp/.rwfs/uboot_env_data.bin";
+-    #else
+-        std::string whitelist = "/run/initramfs/rw/cow/whitelist";
+-        std::string u_boot_bkup = "/run/initramfs/rw/cow/uboot_env_data.bin";
+-    #endif
+-    std::ofstream whitelistFile(whitelist, std::ios::trunc);
+-    auto bus = sdbusplus::bus::new_default();
+-    try
+-    {
+-        auto getpreserveobjectpaths = bus.new_method_call(
+-            "xyz.openbmc_project.ObjectMapper",
+-            "/xyz/openbmc_project/object_mapper",
+-            "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths");
+-        getpreserveobjectpaths.append(
+-            "/", 0,
+-            std::vector<std::string>{
+-                "xyz.openbmc_project.Configuration.Preserve"});
+-
+-        auto getpreserveobjects = bus.call(getpreserveobjectpaths);
+-        std::vector<std::string> configList;
+-        getpreserveobjects.read(configList);
+-        for (const auto& configObj : configList)
+-        {
+-            try
+-            {
+-                auto isEnableCall = bus.new_method_call(
+-                    "xyz.openbmc_project.EntityManager", configObj.c_str(),
+-                    "org.freedesktop.DBus.Properties", "Get");
+-                isEnableCall.append(
+-                    "xyz.openbmc_project.Configuration.Preserve", "isEnable");
+-
+-                auto isEnableReply = bus.call(isEnableCall);
+-                std::variant<bool> isEnableVariant;
+-                isEnableReply.read(isEnableVariant);
+-                bool isEnable = std::get<bool>(isEnableVariant);
+-                std::string ConfigName = configObj.substr(configObj.find_last_of('/') + 1);
+-
+-                if (isEnable)
+-                {
+-                    auto filePathCall = bus.new_method_call(
+-                        "xyz.openbmc_project.EntityManager", configObj.c_str(),
+-                        "org.freedesktop.DBus.Properties", "Get");
+-                    filePathCall.append(
+-                        "xyz.openbmc_project.Configuration.Preserve",
+-                        "filepath");
+-                    auto filePathReply = bus.call(filePathCall);
+-                    std::variant<std::vector<std::string>> filePathsVariant;
+-                    filePathReply.read(filePathsVariant);
+-                    if (auto filePaths = std::get_if<std::vector<std::string>>(
+-                            &filePathsVariant))
+-                    {
+-                        for (const auto& filePath : *filePaths)
+-                        {
+-                            whitelistFile << filePath << std::endl;
+-                        }
+-                    }
+-                    else
+-                    {
+-                        error("Failed to get {CONFNAME} modules filepath", "CONFNAME", ConfigName);
+-                    }
+-
+-                    if (ConfigName == "U_BOOT_ENV") {
+-                        std::ifstream mtdDevices("/proc/mtd");
+-                        std::string mtd, mtdpart, mtdSize;
+-                        std::ostringstream mtdHexSize;
+-
+-                        try
+-                        {
+-                            // get u-boot-env mtd partition
+-                            while (std::getline(mtdDevices, mtd))
+-                            {
+-                                if (mtd.find("u-boot-env") != std::string::npos)
+-                                {
+-                                    mtdpart = mtd.substr(0, mtd.find(':'));
+-                                    break;
+-                                }
+-                            }
+-                            // get u-boot-env mtd size
+-                            std::string mtdsizefile = "/sys/class/mtd/" + mtdpart + "/size";
+-                            std::ifstream getMTDSize(mtdsizefile);
+-                            getMTDSize >> mtdSize;
+-                            getMTDSize.close();
+-                            mtdHexSize << "0x" << std::hex << stoi(mtdSize);
+-                            // Backup u-boot-env data from mtd partition
+-                            std::string cmd_args = "mtd_debug read /dev/" + mtdpart + " 0 " + mtdHexSize.str() + " " + u_boot_bkup;
+-                            auto val = std::system(cmd_args.c_str());
+-
+-                            if (val) {
+-                                error("Failed to backup u-boot-env parition ");
+-                            }
+-                        }
+-                        catch (const std::exception& e)
+-                        {
+-                            error("Error during processing: {ERROR}", "ERROR", e);
+-                        }
+-
+-                        mtdDevices.close();
+-                    }
+-                }
+-                else {
+-                    auto filePathCall = bus.new_method_call(
+-                        "xyz.openbmc_project.EntityManager", configObj.c_str(),
+-                        "org.freedesktop.DBus.Properties", "Get");
+-                    filePathCall.append(
+-                        "xyz.openbmc_project.Configuration.Preserve",
+-                        "filepath");
+-                    auto filePathReply = bus.call(filePathCall);
+-                    std::variant<std::vector<std::string>> filePathsVariant;
+-                    filePathReply.read(filePathsVariant);
+-                    if (auto filePaths = std::get_if<std::vector<std::string>>(
+-                            &filePathsVariant))
+-                    {
+-                        for (const auto& filePath : *filePaths)
+-                        {
+-                            std::error_code ec;
+-                            fs::remove_all(filePath, ec);
+-                        }
+-                    }
+-                }
+-            }
+-            catch (const sdbusplus::exception::SdBusError& e)
+-            {
+-                error("Failed to get Property status: {ERROR}", "ERROR", e);
+-                return;
+-            }
+-        }
+-        // Clear user selection and set to default
+-        for (const auto& configObj : configList)
+-        {
+-            try
+-            {
+-                auto isOptionalCall = bus.new_method_call(
+-                    "xyz.openbmc_project.EntityManager", configObj.c_str(),
+-                    "org.freedesktop.DBus.Properties", "Get");
+-                isOptionalCall.append(
+-                    "xyz.openbmc_project.Configuration.Preserve", "isOptional");
+-
+-                auto isOptionalReply = bus.call(isOptionalCall);
+-                std::variant<bool> isOptionalVariant;
+-                isOptionalReply.read(isOptionalVariant);
+-                bool isOptional = std::get<bool>(isOptionalVariant);
+-                std::variant<bool> isOptionalVal = false;
+-                std::string ConfigName = configObj.substr(configObj.find_last_of('/') + 1);
+-
+-                if (isOptional && ConfigName != "U_BOOT_ENV")
+-                {
+-                    auto method = bus.new_method_call("xyz.openbmc_project.EntityManager", configObj.c_str(),
+-                            "org.freedesktop.DBus.Properties", "Set");
+-                    method.append("xyz.openbmc_project.Configuration.Preserve", "isEnable" , isOptionalVal);
+-
+-                    bus.call_noreply(method);
+-                }
+-            }
+-            catch (const sdbusplus::exception::SdBusError& e)
+-            {
+-                error("Failed to set Property status: {ERROR}", "ERROR", e);
+-                return;
+-            }
+-        }
+-
+-    }
+-    catch (const sdbusplus::exception::SdBusError& e)
+-    {
+-       error("Error in getting restore factory file list: {ERROR}", "ERROR", e);
+-        return;
+-    }
+-    whitelistFile.close();
+-    // Set openbmconce=factory-reset env in U-Boot.
+-    // The init will cleanup rwfs during boot.
++    // TiogaPass (static-norootfs): the reset is a ubiformat of the whole rwfs
++    // volume, done by the initramfs on the next boot when it sees this key.
++    // Nothing is preserved and nothing reads a whitelist on this platform, so
++    // the Preserve-config pass that used to run here only did harm: for every
++    // config with isEnable=false it fs::remove_all()ed the listed paths on the
++    // LIVE system -- /etc/pam.d, /etc/passwd, /etc/shadow, /etc/ipmi_pass,
++    // /etc/systemd/network ... -- and on the /etc overlay that hides the image
++    // defaults too.  Every login (console, SSH, Redfish, IPMI) failed from the
++    // moment the reset was armed until the reboot actually wiped the volume.
++    // Set openbmconce=factory-reset and nothing else.
+     utils::execute("/sbin/fw_setenv", "openbmconce", "factory-reset");
+ }
+ 
