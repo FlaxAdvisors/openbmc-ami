@@ -1,6 +1,6 @@
 From: Flax <hmccanne@exclamationpoint.com>
 Subject: [PATCH] Restore Configuration: trigger the factory reset that this
- platform actually has
+ platform actually has, and reboot to perform it
 
 NetFn 0x30 / cmd 0x02 has always been registered and allowlisted, and it looks
 like a working factory reset -- it takes the 'C','L','R' confirmation and the
@@ -18,11 +18,12 @@ boot and 30-ubiattach-or-format then runs ubiformat on the rwfs volume, which
 discards the upper layer of the /etc, /var and /home overlays.  Call that
 instead of writing the dead file.
 
-Deliberately no reboot.  bmcweb follows its Reset() with a graceful restart, so
-the Redfish button reboots the BMC on the operator's behalf; a raw IPMI command
-that silently drops the BMC is a worse default, and the reset is armed either
-way.  The operator reboots when ready.  This is a deliberate difference in
-behaviour between the two paths, not an oversight.
+Then reboot the BMC, as the Redfish reset and the WebUI button do (bmcweb
+follows Reset() with doBMCGracefulRestart).  An operator who asked for a
+factory reset expects it to happen, and arming a reset that only fires at some
+later, unrelated reboot is a trap.  The reboot is requested from the BMC state
+manager (RequestedBMCTransition = Reboot) two seconds after the handler returns,
+so the IPMI response reaches the caller before the BMC goes down.
 
 The status subcommand now reads openbmconce back rather than stat-ing the dead
 file, because nothing else holds that state -- the key is consumed by the
@@ -31,9 +32,19 @@ initramfs and cleared by clear-once.service.
 Upstream-Status: Inappropriate [platform-specific]
 
 ---
+diff --git a/src/oemcommands.cpp b/src/oemcommands.cpp
+index d0158de8..65ff51a8 100644
 --- a/src/oemcommands.cpp
 +++ b/src/oemcommands.cpp
-@@ -3114,6 +3114,55 @@
+@@ -22,6 +22,7 @@
+ #include <systemd/sd-journal.h>
+ 
+ #include <appcommands.hpp>
++#include <boost/asio/steady_timer.hpp>
+ #include <boost/container/flat_map.hpp>
+ #include <boost/process/child.hpp>
+ #include <boost/process/io.hpp>
+@@ -3114,6 +3115,99 @@ ipmi::RspType<> ipmiSetSecurityMode(ipmi::Context::ptr& ctx,
      return ipmi::responseSuccess();
  }
  
@@ -86,10 +97,54 @@ Upstream-Status: Inappropriate [platform-specific]
 +    }
 +}
 +
++/*
++ * Reboot the BMC shortly after a factory reset is armed, the same way the
++ * Redfish/WebUI reset does (bmcweb doBMCGracefulRestart): request a Reboot
++ * transition from the BMC state manager.  Deferred so the IPMI response is on
++ * the wire before the BMC goes down -- the caller gets its completion code
++ * rather than a dropped session.
++ */
++static void scheduleBmcReboot()
++{
++    static constexpr auto rebootDelay = std::chrono::seconds(2);
++
++    auto io = getIoContext();
++    auto bus = getSdBus();
++    if (!io || !bus)
++    {
++        phosphor::logging::log<phosphor::logging::level::ERR>(
++            "ipmiRestoreConfiguration: no io context; reboot the BMC manually");
++        return;
++    }
++
++    auto timer = std::make_shared<boost::asio::steady_timer>(*io, rebootDelay);
++    timer->async_wait([timer, bus](const boost::system::error_code& ec) {
++        if (ec)
++        {
++            return;
++        }
++        bus->async_method_call(
++            [](const boost::system::error_code& ec2) {
++                if (ec2)
++                {
++                    phosphor::logging::log<phosphor::logging::level::ERR>(
++                        "ipmiRestoreConfiguration: BMC reboot request failed",
++                        phosphor::logging::entry("ERROR=%s",
++                                                 ec2.message().c_str()));
++                }
++            },
++            "xyz.openbmc_project.State.BMC", "/xyz/openbmc_project/state/bmc0",
++            "org.freedesktop.DBus.Properties", "Set",
++            "xyz.openbmc_project.State.BMC", "RequestedBMCTransition",
++            std::variant<std::string>(
++                "xyz.openbmc_project.State.BMC.Transition.Reboot"));
++    });
++}
++
  ipmi::RspType<uint8_t /* restore status */>
      ipmiRestoreConfiguration(const std::array<uint8_t, 3>& clr, uint8_t cmd)
  {
-@@ -3128,8 +3177,6 @@
+@@ -3128,8 +3222,6 @@ ipmi::RspType<uint8_t /* restore status */>
      constexpr uint8_t cmdFullRestore = 0xbb;
      constexpr uint8_t cmdFormat = 0xcc;
  
@@ -98,7 +153,7 @@ Upstream-Status: Inappropriate [platform-specific]
      switch (cmd)
      {
          case cmdStatus:
-@@ -3138,14 +3185,30 @@
+@@ -3138,19 +3230,36 @@ ipmi::RspType<uint8_t /* restore status */>
          case cmdFullRestore:
          case cmdFormat:
          {
@@ -117,14 +172,14 @@ Upstream-Status: Inappropriate [platform-specific]
 +            std::shared_ptr<sdbusplus::asio::connection> busp = getSdBus();
 +
 +            try
-+            {
+             {
 +                auto method = busp->new_method_call(
 +                    factoryResetService, factoryResetPath, factoryResetIntf,
 +                    "Reset");
 +                busp->call(method);
 +            }
 +            catch (const std::exception& e)
-             {
++            {
 +                phosphor::logging::log<phosphor::logging::level::ERR>(
 +                    "ipmiRestoreConfiguration: FactoryReset failed",
 +                    phosphor::logging::entry("ERROR=%s", e.what()));
@@ -133,8 +188,15 @@ Upstream-Status: Inappropriate [platform-specific]
 -            restoreFile << value << "\n";
  
              phosphor::logging::log<phosphor::logging::level::WARNING>(
-                 "Restore to default will be performed on next BMC boot",
-@@ -3160,10 +3223,8 @@
+-                "Restore to default will be performed on next BMC boot",
++                "Factory reset armed; rebooting the BMC to perform it",
+                 phosphor::logging::entry("ACTION=0x%0X", cmd));
+ 
++            scheduleBmcReboot();
+             break;
+         }
+         default:
+@@ -3160,10 +3269,8 @@ ipmi::RspType<uint8_t /* restore status */>
      constexpr uint8_t restorePending = 0;
      constexpr uint8_t restoreComplete = 1;
  
