@@ -73,14 +73,17 @@ AUTO_POWER_CYCLE="${BIOS_UPDATE_AUTO_POWER_CYCLE:-1}"
 CYCLE_DELAY_S="${BIOS_UPDATE_CYCLE_DELAY_S:-20}"
 WRITE_ME="${BIOS_UPDATE_WRITE_ME:-0}"
 
-# ADM1275 hot-swap controller.  Writing 0x0c to manufacturer register 0xd9 makes
-# it drop and restore its own output = a real G3 for the whole node, which is
-# what clears the post-ME-flash lockout.  Same register FB's power-util uses for
-# sled_cycle on this board.  -f is required because the adm1275 driver is bound.
+# ADM1275 hot-swap controller.  PMBus SEND BYTE of command 0xd9 makes it drop
+# and restore its own output = a real G3 for the whole node, which is what
+# clears the post-ME-flash lockout.  FB's power-util does the same for
+# sled_cycle on this board: `i2cset -y 7 0x45 0xd9 c`.  That trailing `c` is
+# i2cset's MODE (send byte, no data), NOT a value -- writing a data byte
+# (`0xd9 0x0c`) is rejected with a CML error and cycles nothing.  -f is
+# required because the adm1275 driver is bound.
 HSC_BUS=7
 HSC_ADDR=0x45
 HSC_REG=0xd9
-HSC_VAL=0x0c
+HSC_MODE=c
 
 # GPIO N5 = BIOS_SPI_BMC_CTRL (offset 109 from chip base)
 # AST2500 has one gpiochip; find its base dynamically.
@@ -346,7 +349,7 @@ preserve_chip_me() {
 # ── hot-swap controller node cycle ───────────────────────────────────────────
 
 HSC_SYSFS="/sys/bus/i2c/devices/${HSC_BUS}-$(printf '%04x' "${HSC_ADDR}")"
-HSC_CMD="i2cset -f -y ${HSC_BUS} ${HSC_ADDR} ${HSC_REG} ${HSC_VAL}"
+HSC_CMD="i2cset -f -y ${HSC_BUS} ${HSC_ADDR} ${HSC_REG} ${HSC_MODE}"
 
 schedule_hsc_cycle() {
     # The cycle drops the BMC too — instantly, with no graceful shutdown — so it
