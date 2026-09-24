@@ -1,3 +1,9 @@
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
+# Make AMI's deferred BMC-reboot timer one-shot; as shipped it re-issues the
+# reboot twice a second forever and the shutdown never runs.  See the patch.
+SRC_URI += "file://0001-bmc-reboot-timer-must-fire-once.patch"
+
 # Fix duplicate D-Bus name issue by using wants instead of requires
 do_install:append() {
     # Remove the multi-user.target.requires symlinks (they cause duplicate bus name errors)

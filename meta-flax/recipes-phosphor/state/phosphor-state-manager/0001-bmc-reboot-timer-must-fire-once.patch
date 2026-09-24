@@ -1,0 +1,35 @@
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] BMC reboot: fire the transition timer once, not forever
+
+AMI's 0001-Timer-Support-for-manager-reset-operation.patch defers
+RequestedBMCTransition through gTimer, an sdeventplus::utility::Timer, and
+arms it with restart(interval).  restart() makes the timer PERIODIC.  With the
+default timeout of 0 it fires continuously (~2x/s): every tick re-runs
+executeTransition(), which re-issues StartUnit("reboot.target",
+"replace-irreversibly") and logs "Setting the BMCState field to NotReady".
+
+systemd receives the reboot transaction again and again; each re-submission
+merges into the pending jobs and the queue never dispatches.  Seen on .245
+2026-09-24: `systemctl is-system-running` = stopping, 179 jobs all "waiting",
+none running, not a single unit stopped in 14 minutes.  SSH and HTTPS drop
+every connection (systemd will not start socket-activated services while
+stopping) while IPMI keeps answering, so the BMC looks half-alive until it is
+AC-cycled.  Every graceful BMC reboot goes through here -- Redfish
+Manager.Reset / ResetToDefaults, IPMI mc reset and factory reset -- and whether
+one gets through is luck.
+
+restartOnce() arms it as a one-shot, which is what a deferred reboot needs.
+
+Upstream-Status: Inappropriate [fixes an AMI patch]
+---
+--- a/bmc_state_manager.cpp
++++ b/bmc_state_manager.cpp
+@@ -230,7 +230,7 @@
+ 
+     info("timeout value""{TIMEOUT}","TIMEOUT", timeOutValue);
+     auto interval = std::chrono::seconds(timeOutValue); // start gTimer
+-    gTimer->restart(interval);
++    gTimer->restartOnce(interval);
+ 
+     return server::BMC::requestedBMCTransition(value);
+ }
