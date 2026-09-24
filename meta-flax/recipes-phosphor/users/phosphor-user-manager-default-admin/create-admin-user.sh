@@ -1,27 +1,49 @@
 #!/bin/sh
-# First-boot script to create required privilege groups and default admin user.
-# Runs once only - creates /etc/flax-ipmi-user.done on success.
+# First-boot account setup.  Runs at every boot but only does work once per
+# /etc (a factory reset wipes the marker, so it runs again on the fresh /etc):
+#   1. create the privilege groups phosphor-user-manager expects
+#   2. remove the old default 'admin' account (earlier images created
+#      admin/0penBmc1; that account is no longer shipped)
+#   3. enable root (IPMI user 1) for LAN call-in -- root defaults to
+#      callin=false, and `ipmitool -I lanplus -U root` fails without it
 
 set -e
 
-NEW_USER="admin"
-NEW_PASS="0penBmc1"
+DONE_FILE="/etc/flax-accounts.done"
+OLD_USER="admin"
 
 log() {
-    echo "<6>flax-ipmi-user: $*" > /dev/kmsg || true
+    echo "<6>flax-accounts: $*" > /dev/kmsg || true
 }
 
 # ---------------------------------------------------------------------------
-# 0. Quit if there's nothing to do
+# Remove the legacy admin account, even on a box that already ran this script
+# (its /etc still holds admin from an older image).
 # ---------------------------------------------------------------------------
-# Check if admin already exists
-if id admin >/dev/null 2>&1; then
-    echo "Admin user already exists"
+remove_admin() {
+    if ! id "${OLD_USER}" >/dev/null 2>&1; then
+        return 0
+    fi
+    for i in $(seq 1 30); do
+        busctl status xyz.openbmc_project.User.Manager >/dev/null 2>&1 && break
+        sleep 2
+    done
+    if busctl call xyz.openbmc_project.User.Manager \
+        "/xyz/openbmc_project/user/${OLD_USER}" \
+        xyz.openbmc_project.Object.Delete Delete >/dev/null 2>&1; then
+        log "Removed legacy user '${OLD_USER}'"
+    else
+        log "WARNING: could not remove legacy user '${OLD_USER}'"
+    fi
+}
+
+if [ -e "${DONE_FILE}" ]; then
+    remove_admin
     exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# 0. Wait for ipmi to be available
+# 0. Wait for ipmid
 # ---------------------------------------------------------------------------
 for i in $(seq 1 30); do
     if systemctl is-active phosphor-ipmi-host >/dev/null 2>&1; then
@@ -39,102 +61,25 @@ for grp in web redfish ipmi ssh hostconsole priv-admin priv-operator priv-user p
     if ! grep -q "^${grp}:" /etc/group; then
         groupadd "${grp}"
         log "Created group: ${grp}"
-    else
-        log "Group already exists: ${grp}"
     fi
 done
 
 # ---------------------------------------------------------------------------
-# 2. Wait for phosphor-user-manager to appear on D-Bus
+# 2. Remove the legacy admin account
 # ---------------------------------------------------------------------------
-log "Waiting for phosphor-user-manager on D-Bus..."
-for i in $(seq 1 30); do
-    if busctl status xyz.openbmc_project.User.Manager > /dev/null 2>&1; then
-        log "phosphor-user-manager is ready."
-        break
-    fi
-    if [ "${i}" -eq 30 ]; then
-        log "ERROR: phosphor-user-manager did not appear on D-Bus after 60s"
-        exit 1
-    fi
-    sleep 2
-done
+remove_admin
 
 # ---------------------------------------------------------------------------
-# 3. Create the user via D-Bus (skips if already exists)
+# 3. Enable root (user 1) for LAN call-in
 # ---------------------------------------------------------------------------
-if busctl tree xyz.openbmc_project.User.Manager 2>/dev/null | grep -q "/xyz/openbmc_project/user/${NEW_USER}"; then
-    log "User '${NEW_USER}' already exists, skipping CreateUser."
-else
-    log "Creating user '${NEW_USER}'..."
-    busctl call \
-        xyz.openbmc_project.User.Manager \
-        /xyz/openbmc_project/user \
-        xyz.openbmc_project.User.Manager \
-        CreateUser \
-        "sassb" \
-        "${NEW_USER}" \
-        4 "web" "ipmi" "redfish" "ssh" \
-        "priv-admin" \
-        true
-    log "User '${NEW_USER}' created."
-fi
-
-# Wait a bit for user manager to sync
-sleep 10
-
-# ---------------------------------------------------------------------------
-# 4. Set the password via passwd (writes /etc/shadow + seeds pam_unix)
-# ---------------------------------------------------------------------------
-log "Setting password for '${NEW_USER}'..."
-echo "${NEW_USER}:${NEW_PASS}" | chpasswd
-
-log "Password set for '${NEW_USER}'."
-
-
-# ---------------------------------------------------------------------------
-# 5. Set ipmi password
-# ---------------------------------------------------------------------------
-# Set IPMI password
-for i in $(seq 1 5); do
-    if ipmitool user set password 2 0penBmc1 2>/dev/null; then
-        echo "IPMI password set successfully"
-        break
-    fi
-    echo "Attempt $i to set IPMI password failed, retrying..."
-    sleep 2
-done
-
-# ---------------------------------------------------------------------------
-# 5. Set channel access
-# ---------------------------------------------------------------------------
-# Set channel access
-for i in $(seq 1 5); do
-    if ipmitool channel setaccess 1 2 link=on ipmi=on callin=on privilege=4 2>/dev/null; then
-        echo "Channel access set successfully"
-        break
-    fi
-    echo "Attempt $i to set channel access failed, retrying..."
-    sleep 2
-done
-
-# ---------------------------------------------------------------------------
-# 5. Adn enable
-# ---------------------------------------------------------------------------
-# Enable user
-ipmitool user enable 2 2>/dev/null
-
-# ---------------------------------------------------------------------------
-# 6. Enable root (user 1) for LAN callin
-# ---------------------------------------------------------------------------
-# root defaults to callin=false; set callin=on so ipmitool -U root works over LAN
 for i in $(seq 1 5); do
     if ipmitool channel setaccess 1 1 callin=on privilege=4 2>/dev/null; then
-        echo "Root channel access set successfully"
-        break
+        log "Root channel access set"
+        touch "${DONE_FILE}"
+        exit 0
     fi
-    echo "Attempt $i to set root channel access failed, retrying..."
     sleep 2
 done
 
-echo "Admin user setup complete"
+log "ERROR: could not enable root LAN call-in; will retry next boot"
+exit 1
