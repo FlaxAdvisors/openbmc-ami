@@ -9,20 +9,15 @@
 #              (+ stable symlink tiogapass-bmc-update.tar -> that file)
 # BIOS output: build/tiogapass/tmp/deploy/images/tiogapass/tiogapass-bios-update.tar
 #
-# ── BMC upload (simple binary POST) ────────────────────────────────────────
-#   curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService \
+# ── Upload (BMC and BIOS: the same binary POST the WebUI sends) ──────────
+#   curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService/update \
 #        -H "Content-Type: application/octet-stream" \
-#        --data-binary @tiogapass-bmc-update.tar
+#        --data-binary @<tar>
 #
-# ── BIOS upload (multipart — Targets required by bmcweb) ───────────────────
-#   curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService \
-#        -F "UpdateFile=@tiogapass-bios-update.tar;type=application/octet-stream" \
-#        -F 'UpdateParameters={"Targets":["/redfish/v1/Managers/bmc"],"@Redfish.OperationApplyTime":"Immediate"};type=application/json'
-#
-# NOTE: For BIOS the Targets value must be /redfish/v1/Managers/bmc (the only
-# target accepted by bmcweb in non-D-Bus update mode).  The actual BIOS flash
-# path is triggered by purpose=VersionPurpose.Host in the MANIFEST, not by
-# the Targets field.
+# NOTE: nothing in the request marks an image as BIOS -- purpose=
+# VersionPurpose.Host in the MANIFEST selects the BIOS flash path.  Avoid the
+# multipart form: bmcweb makes its Targets field mandatory and validates it
+# before the image reaches the flash path.
 
 set -e
 
@@ -64,10 +59,10 @@ EOF
     echo ""
     echo "Done: ${OUTPUT}  ($(du -h "$OUTPUT" | cut -f1))"
     echo ""
-    echo "Upload via curl (Redfish multipart — Targets required):"
-    echo "  curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService \\"
-    echo "       -F 'UpdateFile=@${OUTPUT};type=application/octet-stream' \\"
-    echo "       -F 'UpdateParameters={\"Targets\":[\"/redfish/v1/Managers/bmc\"],\"@Redfish.OperationApplyTime\":\"Immediate\"};type=application/json'"
+    echo "Upload via curl (Redfish):"
+    echo "  curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService/update \\"
+    echo "       -H 'Content-Type: application/octet-stream' \\"
+    echo "       --data-binary @${OUTPUT}"
     exit 0
 fi
 
@@ -126,6 +121,6 @@ echo "Upload via web UI:"
 echo "  https://<bmc-ip>  ->  Settings -> Firmware -> Upload BMC image"
 echo ""
 echo "Upload via curl (Redfish):"
-echo "  curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService \\"
+echo "  curl -k -u root:0penBmc -X POST https://<bmc-ip>/redfish/v1/UpdateService/update \\"
 echo "       -H 'Content-Type: application/octet-stream' \\"
 echo "       --data-binary @${OUTPUT}"
