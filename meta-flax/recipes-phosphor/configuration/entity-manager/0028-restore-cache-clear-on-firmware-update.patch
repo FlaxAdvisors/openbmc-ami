@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Fri, 25 Sep 2026 15:00:00 +0000
+Subject: [PATCH] Restore cache invalidation on firmware update
+
+Upstream entity-manager drops /var/configuration/system.json when the
+firmware version (/etc/os-release hash) changes, so a new image's
+configurations are applied.  AMI's "SDR Preserve" change kept any
+existing cache regardless of version, which left every upgraded BMC
+running on configurations built from the previous image: fixes shipped
+in fbtp.json never took effect until the cache was deleted by hand.
+
+Restore the upstream condition.  Runtime edits made to entity-manager
+objects (threshold values, fan PID settings) are therefore lost on a
+firmware update, as they are on a factory reset.
+---
+ src/entity_manager.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/entity_manager.cpp b/src/entity_manager.cpp
+--- a/src/entity_manager.cpp
++++ b/src/entity_manager.cpp
+@@ -1378,7 +1378,7 @@ int main()
+     });
+     tryIfaceInitialize(entityIface);
+
+-    if (fwVersionIsSame() || std::filesystem::exists(currentConfiguration))
++    if (fwVersionIsSame())
+     {
+         if (std::filesystem::is_regular_file(currentConfiguration))
+         {

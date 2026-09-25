@@ -94,3 +94,15 @@ SRC_URI:append = " file://flax-eeprom-empty.json"
 do_install:append() {
     install -m 0444 ${WORKDIR}/flax-eeprom-empty.json ${D}${datadir}/entity-manager/configurations/eeprom.json
 }
+
+# 0028 - restore upstream's cache invalidation on firmware update.  entity-
+#        manager caches its resolved config in /var/configuration/system.json
+#        and upstream drops that cache whenever /etc/os-release changes.  AMI's
+#        0004 ("SDR Preserve") made it keep any existing cache regardless, so
+#        on every upgraded BMC the cache (built from the OLD shipped configs)
+#        won and new fbtp.json fixes never took effect: 0023 hysteresis, 0026
+#        PCH VR Labels (false "Reading 12 > Threshold 1" SEL on 23.102/10.101).
+#        Cost: runtime D-Bus/Redfish edits to EM objects (threshold values,
+#        OEM fan PID edits) no longer survive a firmware update.  Must be
+#        :append so it applies after AMI's 0004.
+SRC_URI:append = " file://0028-restore-cache-clear-on-firmware-update.patch"
