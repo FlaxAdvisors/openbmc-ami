@@ -1,4 +1,4 @@
-SUMMARY = "First-boot account setup: privilege groups, root LAN call-in, remove legacy admin"
+SUMMARY = "First-boot account setup: privilege groups and root LAN call-in"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/COPYING.MIT;md5=3da9cfbcb788c80a0384361b4de20420"
 

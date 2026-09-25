@@ -1,5 +1,5 @@
 [Unit]
-Description=First-boot account setup (groups, root LAN call-in, drop legacy admin)
+Description=First-boot account setup (groups, root LAN call-in)
 After=xyz.openbmc_project.User.Manager.service phosphor-ipmi-host.service phosphor-ipmi-net@eth0.service
 Requires=xyz.openbmc_project.User.Manager.service phosphor-ipmi-host.service
 
