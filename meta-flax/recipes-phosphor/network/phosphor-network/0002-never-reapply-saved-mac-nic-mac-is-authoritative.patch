@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Date: Fri, 25 Sep 2026 14:00:00 +0000
+Subject: [PATCH] Never re-apply a saved MAC; the NIC's own MAC is
+ authoritative
+
+The kernel sets eth0's MAC from the NIC over NC-SI at link-up (Get MAC
+Address, with the single-port 14.32 correction in kernel patch 0018).
+phosphor-network then re-applied any [Link]/MACAddress found in
+00-bmc-eth0.network on top of it, in the constructor and again in
+updateInfo(). Patch 0001 stopped new automatic MACs being saved, but a
+MAC saved by older firmware -- or by an earlier NIC -- survived firmware
+updates in the /etc overlay and kept overriding the card, so DHCP served
+the old identity (seen 2026-09-25 on 172.17.25.102 after a NIC swap).
+
+At startup, drop any saved MAC from the config file instead of applying
+it, and have systemd-networkd reload the file. updateInfo() no longer
+re-applies a saved MAC. A MAC set over Redfish or IPMI still applies
+immediately, but lasts only until the next boot.
+---
+ src/ethernet_interface.cpp | 41 ++++++++++++++++++++++++++--------------
+ src/ethernet_interface.hpp |  9 ++++-----
+ 2 files changed, 29 insertions(+), 21 deletions(-)
+
+--- a/src/ethernet_interface.cpp
++++ b/src/ethernet_interface.cpp
+@@ -297,12 +297,28 @@
+     if (std::string mac = getMAC(config); !mac.empty())
+ #endif
+     {
+-        system::setNICUp(interfaceName(), false);
+-        MacAddressIntf::macAddress(mac, true);
+-        manager.get().reconfigLink(ifIdx);
+-        // A MAC persisted in the config file is one a user previously set;
+-        // remember that so subsequent config writes keep persisting it.
+-        macUserConfigured = true;
++        // The NIC's own MAC is authoritative: the kernel reads it from the
++        // card over NC-SI at link-up. Never re-apply a saved MAC over it --
++        // one left by an earlier card follows the BMC across a NIC swap and
++        // DHCP then serves the wrong identity. Drop it from the config so
++        // systemd-networkd stops applying it too. A MAC set over Redfish or
++        // IPMI therefore lasts only until the next boot.
++        auto path = config::pathForIntfConf(manager.get().getConfDir(),
++                                            interfaceName());
++        config::Parser saved(path);
++        for (auto& link : saved.map["Link"])
++        {
++            if (auto it = link.find("MACAddress"); it != link.end())
++            {
++                link.erase(it);
++            }
++        }
++        saved.writeFile(path);
++        // networkd loaded the old file at boot; make it re-read this one.
++        manager.get().reloadConfigs();
++        lg2::info("Dropped saved MAC {NET_MAC} on {NET_INTF}; "
++                  "using the NIC's own MAC",
++                  "NET_MAC", mac, "NET_INTF", interfaceName());
+     }
+ 
+     signals = initSignals();
+@@ -361,16 +377,9 @@
+             phosphor::network::ncsi::getLinkStatus(ifIdx), skipSignal);
+     }
+ #endif
+-    config::Parser config(
+-        config::pathForIntfConf(manager.get().getConfDir(), interfaceName()));
+-    if (std::string mac = getMAC(config);
+-        !mac.empty() && MacAddressIntf::macAddress() != mac)
+-    {
+-        system::setNICUp(interfaceName(), false);
+-        MacAddressIntf::macAddress(mac, true);
+-        manager.get().reconfigLink(ifIdx);
+-    }
+-    else if (info.mac)
++    // No saved-MAC re-apply here: the running MAC is the NIC's own (see the
++    // constructor), so the D-Bus property just follows the kernel.
++    if (info.mac)
+     {
+         if (stdplus::toStr(*info.mac) != MacAddressIntf::macAddress() &&
+             manager.get().initCompleted)
+--- a/src/ethernet_interface.hpp
++++ b/src/ethernet_interface.hpp
+@@ -548,11 +548,10 @@
+     std::atomic<bool> vlanMonitorActive{true};
+ 
+     /** @brief True only when the BMC MAC was explicitly configured by a user
+-     *  (Redfish/IPMI), or restored from a user-set value previously persisted
+-     *  in the network config. Gates whether writeConfigurationFile() emits the
+-     *  [Link]/MACAddress directive, so the running NC-SI-derived MAC is never
+-     *  auto-frozen into config (which would otherwise be forced onto a swapped
+-     *  mezzanine NIC on the next boot). */
++     *  (Redfish/IPMI) during this boot. Gates whether writeConfigurationFile()
++     *  emits the [Link]/MACAddress directive, which is how systemd-networkd
++     *  applies that MAC. The next boot drops it again (see the constructor):
++     *  the NIC's own MAC is authoritative. */
+     bool macUserConfigured = false;
+ 
+     void startVlanMonitorThread();
