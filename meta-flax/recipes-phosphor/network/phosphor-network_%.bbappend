@@ -9,9 +9,3 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 # stops pinning the discovered default gateway as a permanent [Neighbor]. Both
 # avoid forcing stale hardware addresses after a mezzanine NIC / gateway change.
 SRC_URI:append = " file://0001-persist-mac-only-when-user-set-no-gateway-neigh.patch"
-
-# 0001 stops NEW automatic MACs being saved, but a MAC saved by older firmware
-# (or an earlier NIC) survives firmware updates in the /etc overlay and kept
-# overriding the card. 0002 never re-applies a saved MAC: it drops it from the
-# config at startup, so the NIC's own NC-SI MAC is always the one in use.
-SRC_URI:append = " file://0002-never-reapply-saved-mac-nic-mac-is-authoritative.patch"
