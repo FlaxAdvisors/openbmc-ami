@@ -22,7 +22,10 @@ SRC_URI += " \
 SRC_URI:append = " file://0013-factory-reset-only-arm-the-reset-no-live-deletes.patch"
 
 # bash: bios-update/backup-bmc-flash are bash scripts.  mtd-utils: flashcp.
-# i2c-tools: i2cset, for the post-ME-flash node cycle through the ADM1275 HSC.
+# bios-update also uses busybox devmem/hexdump/timeout/cmp and /dev/ipmb-4 (raw
+# IPMB to the ME), all already in the image.  i2c-tools: no longer used by
+# bios-update (1.1.4 dropped the hot-swap node cycle); kept so
+# i2cget/i2cset/i2cdetect stay in the image for on-BMC diagnostics.
 RDEPENDS:${PN}-updater += "bash mtd-utils i2c-tools"
 
 do_install:append() {
