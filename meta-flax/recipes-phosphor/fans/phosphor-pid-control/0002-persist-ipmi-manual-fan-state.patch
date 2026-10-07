@@ -1,0 +1,300 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Flax <hmccanne@exclamationpoint.com>
+Subject: [PATCH] Keep IPMI manual fan mode and duty across reboots and swampd
+ restarts
+
+Manual mode set with the OEM fan control command (NetFn 0x2E, IANA 49871,
+cmd 0x04, subcommand 1) lived only in swampd's memory, and the duty set with
+subcommand 3 was just the FanPwm Target property, which swampd overwrites as
+soon as it is back in automatic mode.  A BMC reboot, a swampd restart, or
+swampd's in-process zone rebuild on an entity-manager config change all
+silently handed the fans back to the PID loop.
+
+The IPMI handler now records the state in
+/var/lib/phosphor-pid-control/manual-zone<N>: the file exists while the zone
+is manual and lists "<pwm> <duty>" for each output given a duty in that time.
+Turning manual mode off deletes it.  swampd reads it every time it builds its
+zones, before their control loops start, and puts back Manual and each
+Target.
+
+Restoring in swampd rather than in a oneshot unit is deliberate: a config
+change rebuilds the zones without restarting the service, and a unit ordered
+after phosphor-pid-control.service would never see that.
+
+Only changes made over IPMI are recorded; a busctl write to Manual or Target
+is not.  /var is the rwfs overlay, so a factory reset clears the state.
+
+Upstream-Status: Inappropriate [platform-specific]
+
+---
+--- a/ipmi/manualcmds.cpp
++++ b/ipmi/manualcmds.cpp
+@@ -19,6 +19,7 @@
+ #include "control.hpp"
+ #include "dbus_mode.hpp"
+ #include "manual_messages.hpp"
++#include "manual_persist.hpp"
+ 
+ #include <ipmid/api.h>
+ 
+@@ -120,6 +121,27 @@
+     /* 0 is false, 1 is true */
+     ipmi_ret_t rc = _control->setFanCtrlProperty(
+         request->zone, static_cast<bool>(request->value), manualProperty);
++    if (rc)
++    {
++        return rc;
++    }
++
++    /*
++     * Remember the mode so swampd puts it back after a reboot or restart.
++     * Entering manual again keeps any duties already recorded; leaving it
++     * forgets the zone entirely.
++     */
++    if (request->value)
++    {
++        auto duties = manual_persist::load(request->zone)
++                          .value_or(manual_persist::Duties{});
++        manual_persist::save(request->zone, duties);
++    }
++    else
++    {
++        manual_persist::clear(request->zone);
++    }
++
+     return rc;
+ }
+ 
+@@ -153,9 +175,26 @@
+     /* This command carries no response payload. */
+     *dataLen = 0;
+ 
++    /*
++     * A duty is only remembered while the zone is manual: in automatic mode
++     * swampd overwrites it on its next cycle, so there is nothing to restore.
++     */
++    manual_persist::Duties duties;
++    if (manual)
++    {
++        duties = manual_persist::load(request->zone)
++                     .value_or(manual_persist::Duties{});
++    }
++
+     if (request->fan != allFanPwm)
+     {
+-        return _control->setFanPwm(request->fan, request->value);
++        rc = _control->setFanPwm(request->fan, request->value);
++        if (rc == IPMI_CC_OK && manual)
++        {
++            duties[request->fan] = request->value;
++            manual_persist::save(request->zone, duties);
++        }
++        return rc;
+     }
+ 
+     /* Succeed if at least one PWM output accepted the write. */
+@@ -165,9 +204,15 @@
+         if (_control->setFanPwm(fan, request->value) == IPMI_CC_OK)
+         {
+             any = true;
++            duties[fan] = request->value;
+         }
+     }
+ 
++    if (any && manual)
++    {
++        manual_persist::save(request->zone, duties);
++    }
++
+     return any ? IPMI_CC_OK : IPMI_CC_INVALID;
+ }
+ 
+--- /dev/null
++++ b/ipmi/manual_persist.hpp
+@@ -0,0 +1,95 @@
++#pragma once
++
++/*
++ * Manual fan state set over IPMI, kept on /var so that it survives a BMC
++ * reboot and a swampd restart.  /var is the rwfs overlay, so a factory reset
++ * wipes it and the fans come back under PID control.
++ *
++ * One file per zone.  The file existing means the zone is in manual mode;
++ * each line inside is "<pwm index> <raw duty 0-255>" for an output that was
++ * given a duty while the zone was manual.  The IPMI handler (ipmid) writes
++ * it, swampd reads it each time it builds its zones.
++ *
++ * Header-only: it is compiled into both libmanualcmds and swampd.
++ */
++
++#include <cstdint>
++#include <filesystem>
++#include <fstream>
++#include <map>
++#include <optional>
++#include <string>
++#include <system_error>
++
++namespace pid_control
++{
++namespace manual_persist
++{
++
++/* pwm index -> raw duty */
++using Duties = std::map<uint8_t, uint8_t>;
++
++inline const std::filesystem::path stateDir = "/var/lib/phosphor-pid-control";
++
++inline std::filesystem::path zoneFile(int64_t zone)
++{
++    return stateDir / ("manual-zone" + std::to_string(zone));
++}
++
++/* Returns nothing when the zone was not left in manual mode. */
++inline std::optional<Duties> load(int64_t zone)
++{
++    std::ifstream in(zoneFile(zone));
++    if (!in)
++    {
++        return std::nullopt;
++    }
++
++    Duties duties;
++    unsigned int fan, duty;
++    while (in >> fan >> duty)
++    {
++        if (fan > 0 && fan <= 0xff && duty <= 0xff)
++        {
++            duties[static_cast<uint8_t>(fan)] = static_cast<uint8_t>(duty);
++        }
++    }
++    return duties;
++}
++
++/* Written to a temporary and renamed so a power loss never leaves half a
++ * file.  Returns false if the state could not be stored. */
++inline bool save(int64_t zone, const Duties& duties)
++{
++    std::error_code ec;
++    std::filesystem::create_directories(stateDir, ec);
++
++    auto path = zoneFile(zone);
++    auto tmp = path;
++    tmp += ".tmp";
++    {
++        std::ofstream out(tmp, std::ios::trunc);
++        for (const auto& [fan, duty] : duties)
++        {
++            out << static_cast<unsigned int>(fan) << ' '
++                << static_cast<unsigned int>(duty) << '\n';
++        }
++        out.flush();
++        if (!out)
++        {
++            std::filesystem::remove(tmp, ec);
++            return false;
++        }
++    }
++    std::filesystem::rename(tmp, path, ec);
++    return !ec;
++}
++
++inline void clear(int64_t zone)
++{
++    std::error_code ec;
++    std::filesystem::remove(zoneFile(zone), ec);
++}
++
++} // namespace manual_persist
++} // namespace pid_control
+--- a/main.cpp
++++ b/main.cpp
+@@ -20,6 +20,7 @@
+ #include "conf.hpp"
+ #include "dbus/dbusconfiguration.hpp"
+ #include "interfaces.hpp"
++#include "ipmi/manual_persist.hpp"
+ #include "pid/builder.hpp"
+ #include "pid/buildjson.hpp"
+ #include "pid/pidloop.hpp"
+@@ -47,6 +48,7 @@
+ #include <thread>
+ #include <unordered_map>
+ #include <utility>
++#include <variant>
+ #include <vector>
+ 
+ namespace pid_control
+@@ -129,6 +131,63 @@
+     state::isCanceling = false;
+ }
+ 
++/*
++ * Put back any manual fan state set over IPMI before this zone set was built
++ * (BMC reboot, swampd restart, or an in-process rebuild on a configuration
++ * change).  See ipmi/manual_persist.hpp.  Runs before the zones' control loops
++ * start, so the PID loop never gets a cycle on a zone that was left manual.
++ */
++static void restoreManualState()
++{
++    static constexpr auto pwmObjectPath =
++        "/xyz/openbmc_project/control/fanpwm/Pwm_";
++    static constexpr auto pwmBusName = "xyz.openbmc_project.FanSensor";
++    static constexpr auto pwmIntf = "xyz.openbmc_project.Control.FanPwm";
++
++    for (const auto& [id, zone] : state::zones)
++    {
++        auto duties = manual_persist::load(id);
++        if (!duties)
++        {
++            continue;
++        }
++
++        auto dbusZone = std::dynamic_pointer_cast<DbusPidZone>(zone);
++        if (!dbusZone)
++        {
++            continue;
++        }
++
++        /* Sets both the loop's flag and the Control.Mode Manual property. */
++        dbusZone->manual(true);
++        std::cerr << "zone " << id << ": restored manual mode\n";
++
++        auto bus = sdbusplus::bus::new_system();
++        for (const auto& [fan, duty] : *duties)
++        {
++            std::string path = pwmObjectPath + std::to_string(fan);
++            try
++            {
++                auto msg = bus.new_method_call(
++                    pwmBusName, path.c_str(),
++                    "org.freedesktop.DBus.Properties", "Set");
++                msg.append(pwmIntf, "Target",
++                           std::variant<uint64_t>(static_cast<uint64_t>(duty)));
++                bus.call_noreply(msg);
++                std::cerr << "zone " << id << ": restored Pwm_"
++                          << static_cast<unsigned int>(fan) << " duty "
++                          << static_cast<unsigned int>(duty) << "\n";
++            }
++            catch (const std::exception& e)
++            {
++                std::cerr << "zone " << id << ": failed to restore Pwm_"
++                          << static_cast<unsigned int>(fan) << ": " << e.what()
++                          << "\n";
++            }
++        }
++    }
++}
++
+ void restartControlLoops()
+ {
+     stopControlLoops();
+@@ -181,6 +240,8 @@
+         std::exit(EXIT_FAILURE);
+     }
+ 
++    restoreManualState();
++
+     for (const auto& i : state::zones)
+     {
+         std::shared_ptr<boost::asio::steady_timer> timer =
