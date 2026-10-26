@@ -206,6 +206,7 @@ me_wait() {
 ME_PROBE_S=${ME_PROBE_S:-30}            # how long a silent ME gets to answer
 ME_RECOVERY_WAIT_S=${ME_RECOVERY_WAIT_S:-60}
 ME_RESET_WAIT_S=${ME_RESET_WAIT_S:-60}
+POWER_OFF_WAIT_S=${POWER_OFF_WAIT_S:-120} # how long the host gets to reach Off
 
 me_info() {
     local rc=0
@@ -642,7 +643,15 @@ fi
 #Power off host server.
 echo "Power off host server"
 power_off
-sleep 15
+# ONETREE: upstream sleeps a fixed 15 s. Poll instead: on hosts that ignore the
+# ACPI soft-off request, this leaves time to power the host off by hand
+# (ipmitool chassis power off) and carries on as soon as it is off.
+echo "Waiting up to ${POWER_OFF_WAIT_S}s for the host to power off"
+_waited=0
+while [ "$(power_status)" != "off" ] && [ "$_waited" -lt "$POWER_OFF_WAIT_S" ]; do
+    sleep 5
+    _waited=$(( _waited + 5 ))
+done
 if [ "$(power_status)" != "off" ];
 then
     echo "Host server didn't power off"
