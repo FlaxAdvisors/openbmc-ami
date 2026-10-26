@@ -14,7 +14,7 @@
 
 require flax-provenance.inc
 
-FLAX_VERSION = "1.1.4"
+FLAX_VERSION = "1.1.5"
 FLAX_RELEASE ?= "0"
 
 # Repos to record provenance for.  Absent ones, and layers with no .git of
