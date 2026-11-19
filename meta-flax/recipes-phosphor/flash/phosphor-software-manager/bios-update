@@ -660,6 +660,10 @@ then
     exit 1
 fi
 echo "Host server powered off"
+# ONETREE: upstream's fixed 15 s also gave the ME time to settle after the
+# S0 -> S5 transition. Keep that after the host is seen off: a recovery request
+# sent right after power-off has gone unacknowledged on IPMB (2026-11-10).
+sleep 15
 
 #Set ME to recovery mode
 # ONETREE: upstream sends the recovery command blind. Here: find out what the
