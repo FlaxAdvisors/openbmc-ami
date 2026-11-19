@@ -1,15 +1,18 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-# TiogaPass host console path (bidirectional SOL via COM1/0x2F8):
-#   Host LPC COM1 (0x2F8, BIOS "COM1") -> ASPEED LPC HICRC decode (0x1e789098=0x0A30)
-#   -> UART4 = /dev/ttyS3 -> obmc-console
-# No UART crossbar: direct LPC hardware decode, no echo feedback loop.
-# No BIOS change needed: BIOS outputs to both COM0 (0x3F8) and COM1 (0x2F8) simultaneously.
+# TiogaPass host console on BIOS COM0 (0x3F8), shared by two endpoints, both full-duplex:
+#   1. SOL (network / ipmitool) via obmc-console on /dev/ttyS3 (UART4), bridged to COM0
+#      through the ASPEED crossbar (uart4<-uart1 out, uart1<-uart4 in).
+#   2. The physical 14-pin debug-card header (wired to UART1's pins): it hears COM0 via
+#      io1=uart1 (TXD1), and its keystrokes are tapped on UART3/ttyS2 (crossbar uart3=io1,
+#      RXD1 pin) and merged into COM0 by obmc-console-dbgcard-bridge.service (ttyS2->ttyS3).
+# See sol-configure.sh for the full routing map. SOL and the debug card coexist with no
+# contention (TXD1/RXD1 are separate pins); HW-validated on .245 2026-10-30.
 OBMC_CONSOLE_HOST_TTY:tiogapass = "ttyS3"
 OBMC_CONSOLE_TTYS:tiogapass = "ttyS3"
-SYSTEMD_SERVICE:${PN}:tiogapass = "obmc-console@ttyS3.service"
+SYSTEMD_SERVICE:${PN}:tiogapass = "obmc-console@ttyS3.service obmc-console-dbgcard-bridge.service"
 
-SRC_URI:append:tiogapass = " file://sol-configure.sh file://80-uart-routing.rules "
+SRC_URI:append:tiogapass = " file://sol-configure.sh file://80-uart-routing.rules file://obmc-console-dbgcard-bridge.service "
 
 do_install:append:tiogapass() {
     # Install our sol-configure.sh (overrides meta-common version)
@@ -31,6 +34,11 @@ do_install:append:tiogapass() {
     install -m 0644 ${WORKDIR}/80-uart-routing.rules \
         ${D}${base_libdir}/udev/rules.d/80-uart-routing.rules
 
+    # Install the debug-card input bridge service (card keystrokes -> COM0).
+    install -d ${D}${systemd_system_unitdir}
+    install -m 0644 ${WORKDIR}/obmc-console-dbgcard-bridge.service \
+        ${D}${systemd_system_unitdir}/obmc-console-dbgcard-bridge.service
+
     # Mask unused console instances — only ttyS3 should run
     install -d ${D}${sysconfdir}/systemd/system
     ln -sf /dev/null ${D}${sysconfdir}/systemd/system/obmc-console@ttyS1.service
@@ -38,4 +46,4 @@ do_install:append:tiogapass() {
     ln -sf /dev/null ${D}${sysconfdir}/systemd/system/obmc-console@ttyVUART0.service
 }
 
-FILES:${PN}:append:tiogapass = " ${base_libdir}/udev/rules.d/80-uart-routing.rules"
+FILES:${PN}:append:tiogapass = " ${base_libdir}/udev/rules.d/80-uart-routing.rules ${systemd_system_unitdir}/obmc-console-dbgcard-bridge.service"

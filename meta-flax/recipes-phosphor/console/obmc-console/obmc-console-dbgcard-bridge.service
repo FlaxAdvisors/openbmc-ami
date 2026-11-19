@@ -1,0 +1,21 @@
+[Unit]
+Description=TiogaPass debug-card serial input bridge (card -> host COM0)
+Documentation=man:sol-configure.sh
+# The crossbar tap (uart3=io1) is set by sol-configure.sh, which runs from the
+# obmc-console@ttyS3 pre-start drop-in. Start after it so /dev/ttyS2 is live.
+After=obmc-console@ttyS3.service
+Wants=obmc-console@ttyS3.service
+# No /dev/ttyS2 (UART3) on non-tiogapass; the unit simply restarts harmlessly.
+
+[Service]
+Type=simple
+# UART3 reads the debug card's RXD1 pin (crossbar uart3=io1); raw, no echo.
+ExecStartPre=/bin/sh -c 'stty -F /dev/ttyS2 raw -echo 115200'
+# Forward debug-card keystrokes into the SOL/COM0 path (ttyS3 = UART4 -> UART1 -> BIOS).
+# One direction only: card OUTPUT (hearing) is hardware via io1=uart1.
+ExecStart=/bin/sh -c 'exec cat /dev/ttyS2 > /dev/ttyS3'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

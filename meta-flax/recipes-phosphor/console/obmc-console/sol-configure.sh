@@ -1,20 +1,27 @@
 #!/bin/sh
 
-# TiogaPass UART routing for host SOL console.
-# BIOS only outputs to COM0 (0x3F8); COM1 (0x2F8) is not used by BIOS.
-# ASPEED crossbar routes BIOS output to ttyS3 via the transparent UART1 path:
+# TiogaPass UART routing for the host console.
+#
+# Two host console endpoints share BIOS COM0 (0x3F8), both full-duplex:
+#   1. SOL (network / ipmitool) via obmc-console on /dev/ttyS3 (UART4)
+#   2. The physical 14-pin debug-card header, wired to UART1's pins
+#
+# BIOS COM0 path (SOL):
 #   BIOS COM0 TX -> LPC UART1 (transparent) -> crossbar uart4<-uart1 -> UART4 RX -> ttyS3
-# Keyboard from SOL back to BIOS:
-#   ttyS3 TX -> UART4 TX -> crossbar uart1<-uart4 -> LPC COM0 keyboard RX -> BIOS
+#   ttyS3 TX     -> UART4 TX -> crossbar uart1<-uart4 -> LPC COM0 keyboard RX -> BIOS
 #
-# The crossbar configuration is volatile (reset on reboot) so it must be
-# set here at service start. The HICRC register (0x1e789098 = 0x0A30) set
-# in U-Boot provides LPC COM1->UART4 decode as a secondary path (read-only
-# from Linux), but BIOS does not use COM1, so the crossbar path is primary.
+# Debug-card path (shares COM0, does NOT disturb SOL):
+#   OUT (card hears): LPC UART1 TX -> io1 pad TXD1 pin -> debug card   (io1=uart1, default)
+#   IN  (card types): debug card -> io1 pad RXD1 pin -> UART3 RX -> /dev/ttyS2
+#                     then obmc-console-dbgcard-bridge.service forwards ttyS2 -> ttyS3,
+#                     merging card keystrokes into the SOL->COM0 path above.
+#   io1 is a PIN PAIR: TXD1 (hearing) and RXD1 (typing) are separate pins, so
+#   io1=uart1 (output to card) and uart3=io1 (read card input) coexist, and
+#   UART1's receiver stays owned by SOL (uart1<-uart4). Result: SOL and the
+#   debug card are both live, simultaneously, with no contention. HW-validated
+#   on .245 2026-10-30 (both drove the BIOS at once; no noise with card absent).
 #
-# Note: when a SOL client connects, obmc-console forwards terminal init
-# sequences (e.g. \x1b[?2004h) to ttyS3 TX which reach the BIOS COM0
-# keyboard buffer. BIOS ignores unrecognized escape sequences during POST.
+# The crossbar is volatile (reset on reboot) so it is set here at service start.
 
 ROUTER=/sys/bus/platform/devices/1e78909c.uart-routing
 
@@ -28,9 +35,11 @@ setup() {
     # Route ttyS3 TX to LPC COM0 keyboard (SOL keyboard -> BIOS)
     echo uart4 > $ROUTER/uart1
 
-    # Chain uart3<-uart1 and uart2<-uart3 to match OEM crossbar state
-    # (secondary path for physical pin output; harmless for software UARTs)
-    echo uart1 > $ROUTER/uart3
+    # Debug-card input tap: UART3 (/dev/ttyS2) RX <- physical io1 pad RXD1 pin.
+    # obmc-console-dbgcard-bridge.service forwards /dev/ttyS2 -> /dev/ttyS3 so
+    # debug-card keystrokes merge into COM0 alongside SOL. (uart2<-uart3 kept
+    # as a harmless echo of the tap; UART2/ttyS1 is masked.)
+    echo io1 > $ROUTER/uart3
     echo uart3 > $ROUTER/uart2
 
     hostserialcfg=$(fw_printenv hostserialcfg 2>/dev/null)
